@@ -1,11 +1,11 @@
 /*
-Name:
-USC ID:
-USC Email:
-Submission Date:
-
-EE569 HW1 - Problem 3: Auto White Balancing (Grey World)
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 3: Color Correction- Auto White Balancing (AWB)
 */
+
 
 #include <iostream>
 #include <fstream>

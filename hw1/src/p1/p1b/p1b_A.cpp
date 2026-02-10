@@ -1,4 +1,11 @@
-// File: hw1/src/p1/p1b/p1b_A.cpp
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - 
+Problem 1(b): Histogram Manipulation 
+*/
 #include <iostream>
 #include <fstream>
 #include <vector>

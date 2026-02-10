@@ -1,12 +1,10 @@
 /*
- * Name: Agam Sidhu
- * USC ID: XXXXXXXXXX
- * Email: agamsidhu@usc.edu
- * Submission Date: January 29, 2026
- *
- * EE569 Digital Image Processing
- * Homework #1
- */
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 2(d): Denoising for color images 
+*/
 
 #include <iostream>
 #include <fstream>

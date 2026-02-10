@@ -1,0 +1,2289 @@
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 1(a): Bilinear Demosaicing
+*/
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <cstdlib>
+
+using namespace std;
+
+//Clamp function
+static inline int clamp(int x, int low, int high) {
+    return max(low, min(high, x));
+}
+//Clamp gray value 
+static inline uint8_t clampGray(const vector<uint8_t>& img,
+                    int width,
+                    int height,
+                    int row,
+                    int col) {
+    row = clamp(row, 0, height - 1);
+    col = clamp(col, 0, width - 1);
+    return img[row * width + col];
+}
+
+//Read raw image function
+static void readraw(const string& filename,
+                    vector<uint8_t>& buffer,
+                    int width,
+                    int height,
+                    int channels)
+{
+    const int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open input file " << filename << endl;
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+    if (!file) {
+        cerr << "Error: failed to read expected bytes from " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+
+//Write raw image function
+static void writeraw(const string& filename,
+                     const vector<uint8_t>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data()),
+               static_cast<streamsize>(buffer.size()));
+    if (!file) {
+        cerr << "Error: failed to write output file " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+//Check color functions
+static inline bool isRed(int row, int col) {
+    return (row % 2 == 0) && (col % 2 == 1);
+}
+
+static inline bool isBlue(int row, int col) {
+    return (row % 2 == 1) && (col % 2 == 0);
+}
+
+static inline bool isGreen(int row, int col) {
+    return !isRed(row, col) && !isBlue(row, col);
+}
+
+//Main function
+int main(int argc, char* argv[]) {
+    if (argc != 5) {
+        cerr << "Usage: " << argv[0] << " input_cfa.raw output_rgb.raw width height\n";
+        return 1;
+    }
+
+    const string inputPath  = argv[1];
+    const string outputPath = argv[2];
+    const int width = atoi(argv[3]);
+    const int height = atoi(argv[4]);
+
+    if (width <= 0 || height <= 0) {
+        cerr << "Error: width and height must be positive.\n";
+        return 1;
+    }
+
+    vector<uint8_t> cfa;
+    readraw(inputPath, cfa, width, height, 1);
+    vector<uint8_t> rgb(3 * width * height, 0);
+    // Set pxels w lambda
+    auto setPixel = [&](int row, int col, int R, int G, int B) {
+        const int idx = (row * width + col) * 3;
+        rgb[idx + 0] = static_cast<uint8_t>(clamp(R, 0, 255));
+        rgb[idx + 1] = static_cast<uint8_t>(clamp(G, 0, 255));
+        rgb[idx + 2] = static_cast<uint8_t>(clamp(B, 0, 255));
+    };
+
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            int R, G, B;
+
+            if (isRed(row, col)) { // Red pixel
+                R = clampGray(cfa, width, height, row, col);
+                G = (clampGray(cfa,width,height,row-1,col) + clampGray(cfa,width,height,row+1,col) + clampGray(cfa,width,height,row,col-1) + clampGray(cfa,width,height,row,col+1)) / 4;
+                B = (clampGray(cfa,width,height,row-1,col-1) + clampGray(cfa,width,height,row-1,col+1) + clampGray(cfa,width,height,row+1,col-1) + clampGray(cfa,width,height,row+1,col+1)) / 4;
+
+            } else if (isBlue(row, col)) { //` Blue pixel
+                B = clampGray(cfa, width, height, row, col);
+                G = (clampGray(cfa,width,height,row-1,col) + clampGray(cfa,width,height,row+1,col) + clampGray(cfa,width,height,row,col-1) + clampGray(cfa,width,height,row,col+1)) / 4;
+                R = (clampGray(cfa,width,height,row-1,col-1) + clampGray(cfa,width,height,row-1,col+1) + clampGray(cfa,width,height,row+1,col-1) + clampGray(cfa,width,height,row+1,col+1)) / 4;
+
+            } else { // Green pixel
+                G = clampGray(cfa, width, height, row, col);
+                if ((row % 2 == 0) && (col % 2 == 0)) {
+                    R = (clampGray(cfa,width,height,row, col-1) + clampGray(cfa,width,height,row, col+1)) / 2;
+                    B = (clampGray(cfa,width,height,row-1,col) + clampGray(cfa,width,height,row+1,col)) / 2;
+                } else { 
+                    B = (clampGray(cfa,width,height,row, col-1) + clampGray(cfa,width,height,row, col+1)) / 2;
+                    R = (clampGray(cfa,width,height,row-1,col) + clampGray(cfa,width,height,row+1,col)) / 2;
+                }
+            }
+            setPixel(row, col, R, G, B);
+        }
+    }
+    writeraw(outputPath, rgb);
+    return 0;
+}
+
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - 
+Problem 1(b): Histogram Manipulation 
+*/
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cstdint>
+#include <algorithm>
+#include <cmath>
+#include <string>
+
+using namespace std;
+
+// Read raw image function 
+static void readraw(const string& filename,
+                    vector<uint8_t>& buffer,
+                    int width,
+                    int height,
+                    int channels)
+{
+    const int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open input file " << filename << endl;
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+    if (!file) {
+        cerr << "Error: failed to read expected bytes from " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+
+// Write raw image function 
+static void writeraw(const string& filename,
+                     const vector<uint8_t>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data()),
+               static_cast<streamsize>(buffer.size()));
+    if (!file) {
+        cerr << "Error: failed to write output file " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+
+// Clamp function
+static inline int clamp(int x, int low, int high) {
+    return max(low, min(high, x));
+}
+
+// Function to write histogram
+static void writeHisto(const string& filename, const vector<long long>& hist) {
+    ofstream out(filename);
+    if (!out) { cerr << "Error: cannot open " << filename << endl; exit(1); }
+    out << "intensity,count\n";
+    for (int k = 0; k < 256; ++k) out << k << "," << hist[k] << "\n";
+    out.close();
+}
+
+// Function to write transfer function
+static void writeTrans(const string& filename, const vector<int>& T) {
+    ofstream out(filename);
+    if (!out) { cerr << "Error: cannot open " << filename << endl; exit(1); }
+    out << "intensity,mapped\n";
+    for (int k = 0; k < 256; ++k) out << k << "," << T[k] << "\n";
+    out.close();
+}
+// Main function
+int main(int argc, char* argv[]) {
+    if (argc != 6) {
+        cerr << "Usage: p1b_A input_airplane.raw output_A.raw hist_original.csv hist_A.csv tf_A.csv\n";
+        return 1;
+    }
+
+    const string input = argv[1];
+    const string output = argv[2];
+    const string histOgCSV = argv[3];
+    const string histOutCSV  = argv[4];
+    const string tfCSV = argv[5];
+
+    const int width = 1024;
+    const int height = 1024;
+    const int channels = 1;
+    const int dim = width * height;
+    const int level = 256;
+
+    vector<uint8_t> img;
+    readraw(input, img, width, height, channels);
+
+
+    vector<long long> hist(level, 0);
+    for (int i = 0; i < dim; ++i) hist[img[i]]++;
+
+    vector<long long> cdf(level, 0);
+    cdf[0] = hist[0];
+    for (int k = 1; k < level; ++k) cdf[k] = cdf[k - 1] + hist[k];
+ 
+    long long cdf_min = 0;
+    for (int k = 0; k < level; ++k) {
+        if (hist[k] != 0) { cdf_min = cdf[k]; break; }
+    }
+
+    vector<int> T(level, 0);
+    for (int k = 0; k < level; ++k) {
+        if (dim == (int)cdf_min) {
+            T[k] = 0;
+        } else {
+            double val = (double)(cdf[k] - cdf_min) / (double)(dim - cdf_min);
+            int mapped = (int)lround((level - 1) * val);
+            T[k] = clamp(mapped, 0, 255);
+        }
+    }
+
+    vector<uint8_t> out(dim);
+    for (int i = 0; i < dim; ++i) out[i] = (uint8_t)T[img[i]];
+
+    writeraw(output, out);
+    vector<long long> histO(level, 0);
+    for (int i = 0; i < dim; ++i) histO[out[i]]++;
+
+    writeHisto(histOgCSV, hist);
+    writeHisto(histOutCSV,  histO);
+    writeTrans(tfCSV, T);
+
+    auto [minIt, maxIt] = minmax_element(out.begin(), out.end());
+    cout << "p1b_A done.\n";
+    cout << "Output min: " << (int)(*minIt) << " max: " << (int)(*maxIt) << "\n";
+    cout << "Wrote: " << output << "\n";
+    cout << "CSVs: " << histOgCSV << ", " << histOutCSV << ", " << tfCSV << "\n";
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 1(b): Histogram Manipulation 
+*/
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cstdint>
+#include <algorithm>
+#include <string>
+
+using namespace std;
+
+// Read raw image function 
+static void readraw(const string& filename,
+                    vector<uint8_t>& buffer,
+                    int width,
+                    int height,
+                    int channels)
+{
+    const int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open input file " << filename << endl;
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+    if (!file) {
+        cerr << "Error: failed to read expected bytes from " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+
+// Write raw image function 
+static void writeraw(const string& filename,
+                     const vector<uint8_t>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data()),
+               static_cast<streamsize>(buffer.size()));
+    if (!file) {
+        cerr << "Error: failed to write output file " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+//Function to write the CDF
+static void writeCD(const string& filename,
+                        const vector<long long>& cdf,
+                        long long dim)
+{
+    ofstream out(filename);
+    if (!out) { cerr << "Error: cannot open " << filename << endl; exit(1); }
+    out << "intensity,cdf\n";
+    for (int k = 0; k < 256; ++k) {
+        double p = (double)cdf[k] / (double)dim;  
+        out << k << "," << p << "\n";
+    }
+    out.close();
+}
+
+// Main function
+int main(int argc, char* argv[]) {
+    if (argc != 5) {
+        cerr << "Usage: p1b_B input_airplane.raw output_B.raw cdf_before.csv cdf_after.csv\n";
+        return 1;
+    }
+
+    const string input = argv[1];
+    const string output = argv[2];
+    const string before= argv[3];
+    const string after  = argv[4];
+
+    const int width = 1024;
+    const int height = 1024;
+    const int channels = 1;
+    const int dim = width * height;
+    const int level = 256;
+
+    vector<uint8_t> img;
+    vector<long long> histogram(level, 0);
+    vector<long long> cdf(level, 0), cdfLow(level, 0);
+    vector<long long> check(level, 0);
+    vector<uint8_t> out(dim);
+
+    readraw(input, img, width, height, channels);
+    for (int i = 0; i < dim; ++i) histogram[img[i]]++;
+
+    cdf[0] = histogram[0];
+    for (int intensity = 1; intensity < level; ++intensity) {
+        cdf[intensity] = cdf[intensity - 1] + histogram[intensity];
+    }
+
+    for (int intensity = 0; intensity < level; ++intensity) {
+        cdfLow[intensity] = cdf[intensity] - histogram[intensity];
+    }
+
+    for (int idx = 0; idx < dim; ++idx) {
+        const int intensity = static_cast<int>(img[idx]);
+        const long long rank = cdfLow[intensity] + check[intensity];
+        check[intensity]++;
+        int mapped = static_cast<int>((static_cast<long long>(level) * rank) / dim);
+        if (mapped >= level) mapped = level - 1; 
+        out[idx] = static_cast<uint8_t>(mapped);
+    }
+    writeraw(output, out);
+
+    vector<long long> histO(level, 0);
+    for (int i = 0; i < dim; ++i) histO[out[i]]++;
+
+    vector<long long> cdfO(level, 0);
+    cdfO[0] = histO[0];
+    for (int k = 1; k < level; ++k) cdfO[k] = cdfO[k - 1] + histO[k];
+
+    writeCD(before, cdf, dim);
+    writeCD(after,  cdfO, dim);
+
+    auto [minIt, maxIt] = minmax_element(out.begin(), out.end());
+    cout << "p1b_B done.\n";
+    cout << "Output min: " << (int)(*minIt) << " max: " << (int)(*maxIt) << "\n";
+    cout << "Wrote: " << output << "\n";
+    cout << "CDF CSVs: " << before << ", " << after << "\n";
+    return 0;
+}
+
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 1(b): Histogram Manipulation 
+*/
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cstdint>
+#include <algorithm>
+#include <string>
+
+using namespace std;
+
+// Read raw image function
+static void readraw(const string& filename,
+                    vector<uint8_t>& buffer,
+                    int width,
+                    int height,
+                    int channels)
+{
+    const int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open input file " << filename << endl;
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+    if (!file) {
+        cerr << "Error: failed to read expected bytes from " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+//1Function to write histogram
+static void writeHisto(const string& filename, const vector<long long>& hist) {
+    ofstream out(filename);
+    if (!out) {
+        cerr << "Error: cannot open CSV output file " << filename << endl;
+        exit(1);
+    }
+    out << "intensity,count\n";
+    for (int k = 0; k < 256; ++k) {
+        out << k << "," << hist[k] << "\n";
+    }
+    out.close();
+}
+
+// Main function
+int main(int argc, char* argv[]) {
+    if (argc != 3) {
+        cerr << "Usage: p1b_hist input_airplane.raw hist_original.csv\n";
+        return 1;
+    }
+
+    const string input = argv[1];
+    const string histogram = argv[2];
+    const int width = 1024;
+    const int height = 1024;
+    const int channels = 1;
+    const int dim = width * height;
+
+    vector<uint8_t> img;
+    vector<long long> hist(256, 0);
+    readraw(input, img, width, height, channels);
+
+    for (int idx = 0; idx < dim; ++idx) {
+        const int intensity = static_cast<int>(img[idx]);
+        hist[intensity]++;
+    }
+    writeHisto(histogram, hist);
+    auto [minIt, maxIt] = minmax_element(img.begin(), img.end());
+    cout << "p1b_hist done.\n";
+    cout << "Min intensity: " << (int)(*minIt) << "  Max intensity: " << (int)(*maxIt) << "\n";
+    cout << "Wrote: " << histogram << "\n";
+    return 0;
+}
+#
+#(1) Name: Agam Sidhu
+#(2) USC ID: 3027948957
+#(3) USC Email: agamsidh@usc.edu
+#(4) Submission Date: February 1, 2026
+#EE569 HW1 - Problem 1(b): Histogram Manipulation 
+#
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+
+def readraw(filename, width, height):
+    with open(filename, 'rb') as f:
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    return data.reshape((height, width))
+
+if len(sys.argv) != 4:
+    print("Usage: python3 plot_p1b_histograms.py image.raw width height")
+    sys.exit(1)
+
+filename = sys.argv[1]
+width = int(sys.argv[2])
+height = int(sys.argv[3])
+
+img = readraw(filename, width, height)
+
+plt.figure(figsize=(8,5))
+plt.hist(img.flatten(), bins=256, range=(0,255))
+plt.title("Histogram")
+plt.xlabel("Intensity")
+plt.ylabel("Pixel Count")
+plt.show()
+
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 1(c): Contrast Limited Adaptive Histogram Equalization
+*/
+
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+
+
+static constexpr int width = 1620;
+static constexpr int height = 1080;
+
+// Clamp function
+static inline uint8_t clamp(double x) {
+    if (x < 0.0){
+        return 0;
+    } 
+    if (x > 255.0){
+        return 255;
+    }
+    return static_cast<uint8_t>(x + 0.5);
+}
+// RGB to YUV convert function
+static inline void toYUV(uint8_t R, uint8_t G, uint8_t B, uint8_t& Y, uint8_t& U, uint8_t& V) {
+    const double y = (0.257 * R) + (0.504 * G) + (0.098 * B) + 16.0;
+    const double u = -(0.148 * R) - (0.291 * G) + (0.439 * B) + 128.0;
+    const double v = (0.439 * R) - (0.368 * G) - (0.071 * B) + 128.0;
+    Y = clamp(y);
+    U = clamp(u);
+    V = clamp(v);
+}
+// YUV to RGB convert function
+static inline void toRGB(uint8_t Y, uint8_t U, uint8_t V, uint8_t& R, uint8_t& G, uint8_t& B) {
+    const double y = static_cast<double>(Y);
+    const double u = static_cast<double>(U);
+    const double v = static_cast<double>(V);
+    const double r = 1.164 * (y - 16.0) + 1.596 * (v - 128.0);
+    const double g = 1.164 * (y - 16.0) - 0.813 * (v - 128.0) - 0.391 * (u - 128.0);
+    const double b = 1.164 * (y - 16.0) + 2.018 * (u - 128.0);
+    R = clamp(r);
+    G = clamp(g);
+    B = clamp(b);
+}
+// Clamp int function
+static inline int clampInt(int x, int low, int high) {
+    if (x < low){
+        return low;
+    }
+    if (x > high){
+        return high;
+    } 
+    return x;
+}
+// Main function
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "Usage:\n  " << argv[0] << " input_towers.raw output_globalA.raw\n";
+        return 1;
+    }
+
+    const std::string input  = argv[1];
+    const std::string output = argv[2];
+    const int level = 256;
+    const size_t dim = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t in_bytes = dim * 3;
+
+    std::vector<uint8_t> rgb(in_bytes);
+    {
+        std::ifstream ifs(input, std::ios::binary);
+        if (!ifs) {
+            std::cerr << "Cannot open input: " << input << "\n";
+            return 1;
+        }
+        ifs.read(reinterpret_cast<char*>(rgb.data()),
+                 static_cast<std::streamsize>(rgb.size()));
+        if (!ifs) {
+            std::cerr << "Input size mismatch. Expected " << rgb.size() << " bytes.\n";
+            return 1;
+        }
+    }
+
+    std::vector<uint8_t> Y(dim), U(dim), V(dim);
+    std::vector<uint32_t> hist(level, 0);
+    std::vector<uint32_t> cdf(level, 0);
+    std::vector<uint8_t> tf(level, 0);
+    uint32_t cdfMin = 0;
+    std::vector<uint8_t> Yp(dim);
+    std::vector<uint8_t> rgbOut(in_bytes);
+
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const size_t base = 3 * idx;
+        uint8_t y, u, v;
+        toYUV(rgb[base + 0], rgb[base + 1], rgb[base + 2], y, u, v);
+        Y[idx] = y;
+        U[idx] = u;
+        V[idx] = v;
+    }
+
+    for (size_t idx = 0; idx < dim; ++idx) {
+        hist[Y[idx]]++;
+    }
+    cdf[0] = hist[0];
+    for (int k = 1; k < level; ++k) {
+        cdf[k] = cdf[k - 1] + hist[k];
+    }
+    for (int k = 0; k < level; ++k) {
+        if (hist[k] > 0) { cdfMin = cdf[k]; break; }
+    }
+    for (int k = 0; k < level; ++k) {
+        if (cdfMin == (uint32_t)dim) {
+            tf[k] = 0;
+        } else {
+            double norm = (double)(cdf[k] - cdfMin) / (double)(dim - cdfMin);
+            int mapped = (int)(255.0 * norm + 0.5);           
+            mapped = clampInt(mapped, 0, 255);
+            tf[k] = static_cast<uint8_t>(mapped);
+        }
+    }
+    for (size_t idx = 0; idx < dim; ++idx) {
+        Yp[idx] = tf[Y[idx]];
+    }
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const size_t base = 3 * idx;
+        uint8_t r, g, b;
+        toRGB(Yp[idx], U[idx], V[idx], r, g, b);
+        rgbOut[base + 0] = r;
+        rgbOut[base + 1] = g;
+        rgbOut[base + 2] = b;
+    }
+    {
+        std::ofstream ofs(output, std::ios::binary);
+        if (!ofs) {
+            std::cerr << "Cannot open output: " << output << "\n";
+            return 1;
+        }
+        ofs.write(reinterpret_cast<const char*>(rgbOut.data()),
+                  static_cast<std::streamsize>(rgbOut.size()));
+        if (!ofs) {
+            std::cerr << "Write failed.\n";
+            return 1;
+        }
+    }
+    std::cout << "p1c_globalA done.\n";
+    std::cout << "Wrote: " << output << "\n";
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 1(c): Contrast Limited Adaptive Histogram Equalization
+*/
+
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+
+static constexpr int width  = 1620;
+static constexpr int height = 1080;
+
+// Clamp function
+static inline uint8_t clamp(double x) {
+    if (x < 0.0)  return 0;
+    if (x > 255.0) return 255;
+    return static_cast<uint8_t>(x + 0.5);
+}
+// RGB to YUV convert function
+static inline void toYUV(uint8_t R, uint8_t G, uint8_t B,
+                         uint8_t& Y, uint8_t& U, uint8_t& V) {
+    const double y = (0.257 * R) + (0.504 * G) + (0.098 * B) + 16.0;
+    const double u = -(0.148 * R) - (0.291 * G) + (0.439 * B) + 128.0;
+    const double v = (0.439 * R) - (0.368 * G) - (0.071 * B) + 128.0;
+    Y = clamp(y);
+    U = clamp(u);
+    V = clamp(v);
+}
+// YUV to RGB convert function
+static inline void toRGB(uint8_t Y, uint8_t U, uint8_t V,
+                         uint8_t& R, uint8_t& G, uint8_t& B) {
+    const double y = static_cast<double>(Y);
+    const double u = static_cast<double>(U);
+    const double v = static_cast<double>(V);
+
+    const double r = 1.164 * (y - 16.0) + 1.596 * (v - 128.0);
+    const double g = 1.164 * (y - 16.0) - 0.813 * (v - 128.0) - 0.391 * (u - 128.0);
+    const double b = 1.164 * (y - 16.0) + 2.018 * (u - 128.0);
+
+    R = clamp(r);
+    G = clamp(g);
+    B = clamp(b);
+}
+// Main function
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "Usage:\n  " << argv[0]
+                  << " input_towers.raw output_globalB.raw\n";
+        return 1;
+    }
+
+    const std::string input  = argv[1];
+    const std::string output = argv[2];
+    const int level = 256;
+    const size_t dim = static_cast<size_t>(width) * height;
+    const size_t in_bytes = dim * 3;
+
+    std::vector<uint8_t> rgb(in_bytes);
+    std::vector<uint8_t> rgbOut(in_bytes);
+    std::vector<uint32_t> hist(level, 0);
+    std::vector<uint32_t> cdf(level, 0);
+    std::vector<uint32_t> cdfLow(level, 0);
+    std::vector<uint32_t> check(level, 0);
+    std::vector<uint8_t> Yp(dim);
+    std::vector<uint8_t> Y(dim), U(dim), V(dim);
+    {
+        std::ifstream ifs(input, std::ios::binary);
+        if (!ifs) { std::cerr << "Cannot open input: " << input << "\n"; return 1; }
+        ifs.read(reinterpret_cast<char*>(rgb.data()),
+                 static_cast<std::streamsize>(rgb.size()));
+        if (!ifs) { std::cerr << "Input size mismatch.\n"; return 1; }
+    }
+
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const size_t base = 3 * idx;
+        uint8_t y, u, v;
+        toYUV(rgb[base], rgb[base + 1], rgb[base + 2], y, u, v);
+        Y[idx] = y;
+        U[idx] = u;
+        V[idx] = v;
+    }
+    for (size_t idx = 0; idx < dim; ++idx) {
+        hist[Y[idx]]++;
+    }
+
+    cdf[0] = hist[0];
+    for (int k = 1; k < level; ++k) {
+        cdf[k] = cdf[k - 1] + hist[k];
+    }
+
+    for (int k = 0; k < level; ++k) {
+        cdfLow[k] = cdf[k] - hist[k];
+    }
+
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const int k = static_cast<int>(Y[idx]);
+        const uint32_t rank = cdfLow[k] + check[k];
+        check[k]++;
+
+        int mapped = (int)((256ULL * rank) / dim);
+        if (mapped > 255) mapped = 255;
+
+        Yp[idx] = static_cast<uint8_t>(mapped);
+    }
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const size_t base = 3 * idx;
+        uint8_t r, g, b;
+        toRGB(Yp[idx], U[idx], V[idx], r, g, b);
+        rgbOut[base]     = r;
+        rgbOut[base + 1] = g;
+        rgbOut[base + 2] = b;
+    }
+    {
+        std::ofstream ofs(output, std::ios::binary);
+        if (!ofs) { std::cerr << "Cannot open output: " << output << "\n"; return 1; }
+        ofs.write(reinterpret_cast<const char*>(rgbOut.data()),
+                  static_cast<std::streamsize>(rgbOut.size()));
+        if (!ofs) { std::cerr << "Write failed.\n"; return 1; }
+    }
+    std::cout << "p1c_globalB done.\n";
+    std::cout << "Wrote: " << output << "\n";
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 1(c): Contrast Limited Adaptive Histogram Equalization
+*/
+
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
+static constexpr int width  = 1620;
+static constexpr int height = 1080;
+
+// Clamp function
+static inline uint8_t clamp(double x) {
+    if (x < 0.0) return 0;
+    if (x > 255.0) return 255;
+    return static_cast<uint8_t>(x + 0.5);
+}
+// RGB to YUV convert function
+static inline void toYUV(uint8_t R, uint8_t G, uint8_t B,
+                         uint8_t& Y, uint8_t& U, uint8_t& V) {
+    const double y = (0.257 * R) + (0.504 * G) + (0.098 * B) + 16.0;
+    const double u = -(0.148 * R) - (0.291 * G) + (0.439 * B) + 128.0;
+    const double v = (0.439 * R) - (0.368 * G) - (0.071 * B) + 128.0;
+    Y = clamp(y);
+    U = clamp(u);
+    V = clamp(v);
+}
+// YUV to RGB convert function
+static inline void toRGB(uint8_t Y, uint8_t U, uint8_t V,
+                         uint8_t& R, uint8_t& G, uint8_t& B) {
+    const double y = static_cast<double>(Y);
+    const double u = static_cast<double>(U);
+    const double v = static_cast<double>(V);
+
+    const double r = 1.164 * (y - 16.0) + 1.596 * (v - 128.0);
+    const double g = 1.164 * (y - 16.0) - 0.813 * (v - 128.0) - 0.391 * (u - 128.0);
+    const double b = 1.164 * (y - 16.0) + 2.018 * (u - 128.0);
+
+    R = clamp(r);
+    G = clamp(g);
+    B = clamp(b);
+}
+// Main function
+int main(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr << "Usage:\n  " << argv[0]
+                  << " input_towers.raw output_clahe.raw [clipLimit] [tilesX] [tilesY]\n";
+        return 1;
+    }
+
+    const std::string input  = argv[1];
+    const std::string output = argv[2];
+    double clipLim = 2.0;
+    int tile_X = 8;
+    int tile_Y = 8;
+
+    if (argc >= 4) clipLim = std::stod(argv[3]);
+    if (argc >= 5) tile_X = std::stoi(argv[4]);
+    if (argc >= 6) tile_Y = std::stoi(argv[5]);
+
+    if (tile_X < 1) tile_X = 1;
+    if (tile_Y < 1) tile_Y = 1;
+    if (clipLim <= 0.0) clipLim = 0.1;
+
+    const size_t dim = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t in_bytes = dim * 3;
+
+    std::vector<uint8_t> rgb(in_bytes);
+    {
+        std::ifstream ifs(input, std::ios::binary);
+        if (!ifs) { std::cerr << "Cannot open input.\n"; return 1; }
+        ifs.read(reinterpret_cast<char*>(rgb.data()),
+                 static_cast<std::streamsize>(rgb.size()));
+        if (!ifs) { std::cerr << "Input size mismatch.\n"; return 1; }
+    }
+
+    std::vector<uint8_t> Y(dim), U(dim), V(dim);
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const size_t base = 3 * idx;
+        uint8_t y, u, v;
+        toYUV(rgb[base + 0], rgb[base + 1], rgb[base + 2], y, u, v);
+        Y[idx] = y;
+        U[idx] = u;
+        V[idx] = v;
+    }
+
+    cv::Mat yMat(height, width, CV_8UC1, Y.data());
+    cv::Mat yOut(height, width, CV_8UC1);
+
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
+    clahe->setClipLimit(clipLim);
+    clahe->setTilesGridSize(cv::Size(tile_X, tile_Y));
+    clahe->apply(yMat, yOut);
+    std::vector<uint8_t> Yp(dim);
+    std::memcpy(Yp.data(), yOut.data, dim);
+
+    std::vector<uint8_t> rgbOut(in_bytes);
+    for (size_t idx = 0; idx < dim; ++idx) {
+        const size_t base = 3 * idx;
+        uint8_t r, g, b;
+        toRGB(Yp[idx], U[idx], V[idx], r, g, b);
+        rgbOut[base + 0] = r;
+        rgbOut[base + 1] = g;
+        rgbOut[base + 2] = b;
+    }
+
+    {
+        std::ofstream ofs(output, std::ios::binary);
+        if (!ofs) { std::cerr << "Cannot open output.\n"; return 1; }
+        ofs.write(reinterpret_cast<const char*>(rgbOut.data()),
+                  static_cast<std::streamsize>(rgbOut.size()));
+        if (!ofs) { std::cerr << "Write failed.\n"; return 1; }
+    }
+
+    std::cout << "p1c_clahe done.\n";
+    std::cout << "Wrote: " << output
+              << " (clipLimit=" << clipLim
+              << ", tiles=" << tile_X << "x" << tile_Y << ")\n";
+    return 0;
+}
+
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 2(a): Basic denoising methods 
+*/
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+#include <cstdlib>
+
+using namespace std;
+
+//Read raw image function
+void readraw(const string& filename,
+             vector<unsigned char>& buffer,
+             int width,
+             int height,
+             int channels)
+{
+    int totalBytes = width * height * channels;
+    buffer.resize(totalBytes);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Can't open input file " << filename << endl;
+        exit(1);
+    }
+
+    file.read(reinterpret_cast<char*>(buffer.data()), totalBytes);
+
+    if (!file) {
+        cerr << "Error: failed to read" << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Write raw image function
+void writeraw(const string& filename,
+              const vector<unsigned char>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+
+    file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+
+    if (!file) {
+        cerr << "Error: failed to write raw file " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+
+//Function to calculate PSNR
+double calc_psnr(const vector<unsigned char>& og,
+                 const vector<unsigned char>& output,
+                 int width,
+                 int height)
+{
+    double mse = 0.0;
+    int pixelCount = width * height;
+
+    for (int i = 0; i < pixelCount; i++) {
+        double diff = og[i] - output[i];
+        mse += diff * diff;
+    }
+    mse /= pixelCount;
+    if (mse == 0.0) {
+        return 1e9;
+    }
+    return 10.0 * log10((255.0 * 255.0) / mse);
+}
+//Clamp function
+inline int clamp(int val, int low, int high) {
+    if (val < low) {
+        return low;
+    }
+    if (val > high) {
+        return high;
+    }
+    return val;
+}
+//Uniform filter creator
+vector<double> uniform(int k) {
+    int size = k * k;
+    double val = 1.0 / size;
+    return vector<double>(size, val);
+}
+//Gaussian filter creator
+vector<double> gaussian(int k, double sigma) {
+    int halfSize = k / 2;
+    vector<double> gaussKernel(k * k);
+    double weightSum = 0.0;
+
+    for (int y = -halfSize; y <= halfSize; y++) {
+        for (int x = -halfSize; x <= halfSize; x++) {
+            double dist = x * x + y * y;
+            double denom = 2.0 * sigma * sigma;
+            double val = exp(-dist / (denom));
+            gaussKernel[(y + halfSize) * k + (x + halfSize)] = val;
+            weightSum += val;
+        }
+    }
+    for (double& val : gaussKernel){
+        val  /= weightSum;
+    }
+    return gaussKernel;
+}
+
+//Convolution function
+vector<unsigned char> convolve(const vector<unsigned char>& input,
+                               const vector<double>& kernel,
+                               int width,
+                               int height,
+                               int k)
+{
+    int halfSize = k / 2;
+    vector<unsigned char> output(width * height);
+    for (int r = 0; r < height; r++) {
+        for (int c = 0; c < width; c++) {
+            double weightedSum = 0.0;
+            for (int rowOffset = -halfSize; rowOffset <= halfSize; rowOffset++) {
+                for (int x = -halfSize; x <= halfSize; x++) {
+
+                    int nbrr = clamp(r + rowOffset, 0, height - 1);
+                    int nbrc = clamp(c + x, 0, width - 1);
+
+                    int kernRow = rowOffset + halfSize;
+                    int kernCol = x + halfSize;
+
+                    double w = kernel[kernRow * k + kernCol];
+                    unsigned char pixel = input[nbrr * width + nbrc];
+
+                    weightedSum += w * pixel;
+                }
+            }
+            int norm= (int)round(weightedSum);
+            output[r * width + c] = (unsigned char)clamp(norm, 0, 255);
+        }
+    }
+
+    return output;
+}
+
+//Main function
+int main(int argc, char** argv) {
+    if (argc < 8) {
+        cout << "Usage:\n"
+             << argv[0]
+             << " og.raw noisy.raw out.raw width height uniform|gauss k [sigma]\n";
+        return 1;
+    }
+
+    string ogPath = argv[1];
+    string noise = argv[2];
+    string outputPath = argv[3];
+
+    int width = stoi(argv[4]);
+    int height = stoi(argv[5]);
+    string filter = argv[6];
+    int k = stoi(argv[7]);
+
+    vector<unsigned char> og;
+    vector<unsigned char> no;
+
+    readraw(ogPath, og, width, height, 1);
+    readraw(noise, no, width, height, 1);
+
+    vector<double> kernel;
+    if (filter == "uniform") {
+        kernel = uniform(k);
+    } else if (filter == "gauss") {
+        if (argc < 9) {
+            cout << "Usage (Gaussian):\n";
+            cout << argv[0] << " og.raw noisy.raw out.raw width height gauss k sigma\n";
+            return 1;
+        }
+        double sig = stod(argv[8]);
+        kernel = gaussian(k, sig);
+    } else {
+        cout << "Must be 'uniform' or 'gauss'\n";
+        return 1;
+    }
+
+    vector<unsigned char> finalFilt = convolve(no, kernel, width, height, k);
+    writeraw(outputPath, finalFilt);
+
+    double psnr = calc_psnr(og, finalFilt, width, height);
+    cout << "PSNR = " << psnr << " dB" << endl;
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 2(b): Bilateral filtering 
+*/
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+#include <cstdlib>
+
+using namespace std;
+
+//Read raw image function
+void readraw(const string& filename,
+             vector<unsigned char>& buffer,
+             int width,
+             int height,
+             int channels)
+{
+    int totalBytes = width * height * channels;
+    buffer.resize(totalBytes);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Can't open input file " << filename << endl;
+        exit(1);
+    }
+
+    file.read(reinterpret_cast<char*>(buffer.data()), totalBytes);
+
+    if (!file) {
+        cerr << "Error: failed to read " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Write raw image function
+void writeraw(const string& filename,
+              const vector<unsigned char>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+
+    file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+
+    if (!file) {
+        cerr << "Error: failed to write raw file " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Clamp function
+int clamp(int val, int low, int high) {
+    if (val < low) return low;
+    if (val > high) return high;
+    return val;
+}
+
+//Function to calculate PSNR
+double calc_psnr(const vector<unsigned char>& og,
+                 const vector<unsigned char>& output,
+                 int width,
+                 int height)
+{
+    double mse = 0.0;
+    int pixelCount = width * height;
+
+    for (int i = 0; i < pixelCount; i++) {
+        double diff = double(og[i]) - double(output[i]);
+        mse += diff * diff;
+    }
+    mse /= pixelCount;
+    if (mse == 0.0) {
+        return 1e9;
+    }
+    return 10.0 * log10((255.0 * 255.0) / mse);
+}
+//Bilateral filter function
+vector<unsigned char> bilat(const vector<unsigned char>& input,
+                                     int width,
+                                     int height,
+                                     int k,
+                                     double sigs,
+                                     double sigc)
+{
+    if (k <= 0 || (k % 2 == 0)) {
+        cerr << "Error: k is not positive and odd" << endl;
+        exit(1);
+    }
+    if (sigs <= 0 || sigc <= 0) {
+        cerr << "Error: sigs and sigc must be greater than 0" << endl;
+        exit(1);
+    }
+
+    int r = k / 2;
+    vector<unsigned char> output(width * height, 0);
+
+    vector<double> spat(k * k, 0.0);
+    double s_denom = 2.0 * sigs * sigs;
+
+    for (int i = -r; i <= r; i++) {
+        for (int j = -r; j <= r; j++) {
+            spat[(i + r) * k + (j + r)] = exp(-(i * i + j * j) / s_denom);
+        }
+    }
+
+    double c_denom = 2.0 * sigc * sigc;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+
+            double centerVal = double(input[y * width + x]);
+            double wsum = 0.0;
+            double weightedSum = 0.0;
+
+            for (int i = -r; i<= r; i++) {
+                int yNbr = clamp(y + i, 0, height - 1);
+                for (int j = -r; j <= r; j++) {
+                    int xNbr = clamp(x + j, 0, width - 1);
+
+                    double neighbor = double(input[yNbr * width + xNbr]);
+                    double delta = neighbor - centerVal;
+
+                    double weightedS = spat[(i + r) * k + (j + r)];
+                    double weightedC = exp(-(delta * delta) / c_denom);
+                    double w = weightedS * weightedC;
+
+                    wsum += w;
+                    weightedSum += w * neighbor;
+                }
+            }
+            int outputVal;
+            if (wsum > 0.0) {
+                outputVal = int(round(weightedSum / wsum));
+            } else {
+                outputVal = int(centerVal);
+            }
+            output[y * width + x] = (unsigned char) clamp(outputVal, 0, 255);
+        }
+    }
+    return output;
+}
+
+//Main function
+int main(int argc, char** argv) {
+    if (argc < 9) {
+        cout << "Usage:\n  " << argv[0]
+             << " og.raw noisy.raw out.raw width height k sigs sigc\n";
+        return 1;
+    }
+
+    string ogPath  = argv[1];
+    string noise = argv[2];
+    string outputPath   = argv[3];
+
+    int width = stoi(argv[4]);
+    int height = stoi(argv[5]);
+    int k = stoi(argv[6]);
+    double sigs = stod(argv[7]);
+    double sigc = stod(argv[8]);
+
+    vector<unsigned char> og;
+    vector<unsigned char> noisy;
+
+    readraw(ogPath, og, width, height, 1);
+    readraw(noise, noisy, width, height, 1);
+
+    vector<unsigned char> filt = bilat(noisy, width, height, k, sigs, sigc);
+    writeraw(outputPath, filt);
+    double psnr = calc_psnr(og, filt, width, height);
+    cout << "PSNR = " << psnr << " dB" << endl;
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 2(c): Non-local means denoising 
+*/
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+#include <cstdlib>
+
+using namespace std;
+
+//Read raw image function
+void readraw(const string& filename,
+             vector<unsigned char>& buffer,
+             int width,
+             int height,
+             int channels)
+{
+    int totalBytes = width * height * channels;
+    buffer.resize(totalBytes);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Can't open input file " << filename << endl;
+        exit(1);
+    }
+
+    file.read(reinterpret_cast<char*>(buffer.data()), totalBytes);
+
+    if (!file) {
+        cerr << "Error: failed to read" << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Write raw image function
+void writeraw(const string& filename,
+              const vector<unsigned char>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+
+    file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+
+    if (!file) {
+        cerr << "Error: failed to write raw file " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Function to calculate PSNR
+double calc_psnr(const vector<unsigned char>& og,
+                 const vector<unsigned char>& output,
+                 int width,
+                 int height)
+{
+    double mse = 0.0;
+    int pixelCount= width * height;
+
+    for (int i = 0; i < pixelCount; i++) {
+        double diff = og[i] - output[i];
+        mse += diff * diff;
+    }
+    mse /= pixelCount;
+    if (mse == 0.0) {
+        return 1e9;
+    }
+    return 10.0 * log10((255.0 * 255.0) / mse);
+}
+
+
+//Clamp function
+inline int clamp(int val, int low, int high) {
+    if (val < low) {
+        return low;
+    }
+    if (val > high) {
+        return high;
+    }
+    return val;
+}
+
+//NLM Denoising function
+vector<unsigned char> nlm(const vector<unsigned char>& input,
+                          int width,
+                          int height,
+                          double h,
+                          int windowSize,
+                          int searchWindow,
+                          double a)
+{
+    int patchRad = windowSize / 2;
+    int searchRad = searchWindow / 2;
+
+    vector<unsigned char> output(width * height, 0);
+
+    double h2 = h * h;
+    if (h2 <= 0.0) {
+        return input;
+    }
+
+    if (a <= 0.0) {
+        a = 1.0;
+    }
+    double a2 = a * a;
+
+    vector<double> Ga(windowSize * windowSize, 0.0);
+
+    // ✅ add gsum
+    double gsum = 0.0;
+    for (int prOffset = -patchRad; prOffset <= patchRad; prOffset++) {
+        for (int pcOffset = -patchRad; pcOffset <= patchRad; pcOffset++) {
+            double g = exp(-(prOffset * prOffset + pcOffset * pcOffset) / (2.0 * a2));
+            Ga[(prOffset + patchRad) * windowSize + (pcOffset + patchRad)] = g;
+            gsum += g;
+        }
+    }
+    if (gsum <= 0.0) gsum = 1.0;
+
+    for (int r = 0; r < height; r++) {
+        for (int c = 0; c < width; c++) {
+            double wsum = 0.0;
+            double weightedSum = 0.0;
+
+            for (int rowOffset = -searchRad; rowOffset <= searchRad; rowOffset++) {
+                int yNbr = clamp(r + rowOffset, 0, height - 1);
+
+                for (int colOffset = -searchRad; colOffset <= searchRad; colOffset++) {
+                    int xNbr = clamp(c + colOffset, 0, width - 1);
+
+                    // ✅ avoid self patch dominating
+                    if (yNbr == r && xNbr == c) continue;
+
+                    double patchDist = 0.0;
+
+                    for (int prOffset = -patchRad; prOffset <= patchRad; prOffset++) {
+                        int pRow1 = clamp(r + prOffset, 0, height - 1);
+                        int pRow2 = clamp(yNbr + prOffset, 0, height - 1);
+
+                        for (int pcOffset = -patchRad; pcOffset <= patchRad; pcOffset++) {
+                            int pCol1 = clamp(c + pcOffset, 0, width - 1);
+                            int pCol2 = clamp(xNbr + pcOffset, 0, width - 1);
+
+                            double pix1 = double(input[pRow1 * width + pCol1]);
+                            double pix2 = double(input[pRow2 * width + pCol2]);
+                            double diff = pix1 - pix2;
+
+                            double g = Ga[(prOffset + patchRad) * windowSize + (pcOffset + patchRad)];
+                            patchDist += g * diff * diff;
+                        }
+                    }
+
+                    // ✅ normalize distance
+                    patchDist /= gsum;
+
+                    double w = exp(-patchDist / h2);
+                    double neighbor = double(input[yNbr * width + xNbr]);
+                    wsum += w;
+                    weightedSum += w * neighbor;
+                }
+            }
+
+            int outputVal;
+            if (wsum > 0.0) {
+                outputVal = (int)round(weightedSum / wsum);
+            } else {
+                outputVal = (int)input[r * width + c];
+            }
+            output[r * width + c] = (unsigned char)clamp(outputVal, 0, 255);
+        }
+    }
+
+    return output;
+}
+
+
+
+
+//Main function
+int main(int argc, char** argv) {
+    if (argc < 10) {
+        cout << "Usage:\n"
+             << argv[0]
+             << " og.raw noisy.raw out.raw width height h windowSize searchWindow a\n";
+        return 1;
+    }
+
+    string ogPath = argv[1];
+    string noise = argv[2];
+    string outputPath = argv[3];
+
+    int width = stoi(argv[4]);
+    int height = stoi(argv[5]);
+
+    double h = stod(argv[6]);
+    int windowSize = stoi(argv[7]); 
+    int searchWindow = stoi(argv[8]);
+    double a = stod(argv[9]);
+    if (a <= 0.0) {
+        cerr << "Error: a must be > 0\n";
+        return 1;
+    }   
+
+    if (windowSize <= 0 || (windowSize % 2 == 0) ||
+        searchWindow <= 0 || (searchWindow % 2 == 0)) {
+        cerr << "Error: windowSize and searchWindow is not positive and odd" << endl;
+        return 1;
+    }
+    if (h <= 0.0) {
+        cerr << "Error: h must be greater than 0" << endl;
+        return 1;
+    }
+
+    vector<unsigned char> og;
+    vector<unsigned char> no;
+
+    readraw(ogPath, og, width, height, 1);
+    readraw(noise, no, width, height, 1);
+
+    vector<unsigned char> denoise = nlm(no, width, height, h, windowSize, searchWindow, a);
+    writeraw(outputPath, denoise);
+
+    double psnr = calc_psnr(og, denoise, width, height);
+    cout << "PSNR = " << psnr << " dB" << endl;
+
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 2(d): Denoising for color images 
+*/
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <string>
+#include <algorithm>
+#include <cstdlib>
+
+using namespace std;
+
+//Read raw image function
+void readraw(const string& filename,
+             vector<unsigned char>& buffer,
+             int width,
+             int height,
+             int channels)
+{
+    int totalBytes = width * height * channels;
+    buffer.resize(totalBytes);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Can't open input file " << filename << endl;
+        exit(1);
+    }
+
+    file.read(reinterpret_cast<char*>(buffer.data()), totalBytes);
+
+    if (!file) {
+        cerr << "Error: failed to read" << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Write raw image function
+void writeraw(const string& filename,
+              const vector<unsigned char>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+
+    file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+
+    if (!file) {
+        cerr << "Error: failed to write raw file " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Clamp function
+inline int clamp(int val, int low, int high) {
+    if (val < low) return low;
+    if (val > high) return high;
+    return val;
+}
+
+
+//Function to calculate PSNR
+double calc_psnr(const vector<unsigned char>& og,
+                 const vector<unsigned char>& output,
+                 int width,
+                 int height)
+{
+    double mse = 0.0;
+    int countPixels = width * height;
+
+    for (int i = 0; i < countPixels; i++) {
+        double diff = double(og[i]) - double(output[i]);
+        mse += diff * diff;
+    }
+
+    mse /= countPixels;
+    if (mse == 0.0) {
+        return 1e9;
+    }
+
+    return 10.0 * log10((255.0 * 255.0) / mse);
+}
+
+
+//Function to calculate PSNR (RGB)
+void calc_psnr_color(const vector<unsigned char>& og,
+                   const vector<unsigned char>& output,
+                   int width,
+                   int height,
+                   double& psnrR,
+                   double& psnrG,
+                   double& psnrB,
+                   double& avg_psnr)
+{
+    double mseR = 0.0;
+    double mseG = 0.0;
+    double mseB = 0.0;
+    int pixelCount = width * height;
+
+    for (int i = 0; i < pixelCount; i++) {
+        int id = i * 3;
+
+        double diffR = double(og[id + 0]) - double(output[id + 0]);
+        double diffG = double(og[id + 1]) - double(output[id + 1]);
+        double diffB = double(og[id + 2]) - double(output[id + 2]);
+        mseR += diffR * diffR;
+        mseG += diffG * diffG;
+        mseB += diffB * diffB;
+    }
+
+    mseR /= pixelCount;
+    mseG /= pixelCount;
+    mseB /= pixelCount;
+
+    auto mse_psnr = [](double mse) -> double {
+        if (mse <= 0.0){
+            return 1e9;
+        }
+        return 10.0 * log10((255.0 * 255.0) / mse);
+    };
+
+    psnrR = mse_psnr(mseR);
+    psnrG = mse_psnr(mseG);
+    psnrB = mse_psnr(mseB);
+    avg_psnr = (psnrR + psnrG + psnrB) / 3.0;
+}
+
+//Median filter function for RGB
+vector<unsigned char> median(const vector<unsigned char>& input,
+                                 int width,
+                                 int height,
+                                 int k)
+{
+    if (k <= 0 || (k % 2 == 0)) {
+        cerr << "Error: medianK is not positive and odd" << endl;
+        exit(1);
+    }
+
+    int halfSize = k / 2;
+    vector<unsigned char> output(width * height * 3, 0);
+
+    vector<unsigned char> window;
+    window.reserve(k * k);
+
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+
+            for (int ch = 0; ch < 3; ch++) {
+                window.clear();
+                for (int i = -halfSize; i <= halfSize; i++) {
+                    int nbrr = clamp(row + i, 0, height - 1);
+                    for (int j = -halfSize; j <= halfSize; j++) {
+                        int nbrc = clamp(col + j, 0, width - 1);
+                        int id = (nbrr * width + nbrc) * 3 + ch;
+                        window.push_back(input[id]);
+                    }
+                }
+                int mid = (int)window.size() / 2;
+                nth_element(window.begin(), window.begin() + mid, window.end());
+                unsigned char med = window[mid];
+
+                int outIdx = (row * width + col) * 3 + ch;
+                output[outIdx] = med;
+            }
+        }
+    }
+    return output;
+}
+
+//Gaussian kernel creator
+vector<double> gaussKernel(int k, double sigma)
+{
+    if (k <= 0 || (k % 2 == 0)) {
+        cerr << "Error: gaussK is not positive and odd" << endl;
+        exit(1);
+    }
+    if (sigma <= 0.0) {
+        cerr << "Error: sigma must be greater thab 0" << endl;
+        exit(1);
+    }
+
+    int halfSize = k / 2;
+    vector<double> kernel(k * k, 0.0);
+
+    double denom = 2.0 * sigma * sigma;
+    double sum = 0.0;
+
+    for (int i = -halfSize; i <= halfSize; i++) {
+        for (int j = -halfSize; j <= halfSize; j++) {
+            double dist = i * i + j * j;
+            double val = exp(-dist / denom);
+            kernel[(i + halfSize) * k + (j + halfSize)] = val;
+            sum += val;
+        }
+    }
+    for (double& v : kernel) {
+        v /= sum;
+    }
+
+    return kernel;
+}
+//Gaussian filter function for RGB
+vector<unsigned char> gaussColor(const vector<unsigned char>& input,
+                                int width,
+                                int height,
+                                int k,
+                                double sigma)
+{
+    vector<double> kernel = gaussKernel(k, sigma);
+    int halfSize = k / 2;
+
+    vector<unsigned char> output(width * height * 3, 0);
+
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            for (int ch = 0; ch < 3; ch++) {
+
+                double sum = 0.0;   // ✅ accumulator in double
+
+                for (int i = -halfSize; i <= halfSize; i++) {
+                    int nbrr = clamp(row + i, 0, height - 1);
+                    for (int j = -halfSize; j <= halfSize; j++) {
+                        int nbrc = clamp(col + j, 0, width - 1);
+
+                        double w = kernel[(i + halfSize) * k + (j + halfSize)];
+                        int id = (nbrr * width + nbrc) * 3 + ch;
+
+                        sum += w * double(input[id]);
+                    }
+                }
+
+                int outputIdx = (row * width + col) * 3 + ch;
+                int outputVal = (int)round(sum);   
+                output[outputIdx] = (unsigned char)clamp(outputVal, 0, 255);
+            }
+        }
+    }
+    return output;
+}
+//NLM Denoising function for RGB
+vector<unsigned char> nlm(const vector<unsigned char>& input,
+                              int width,
+                              int height,
+                              double h,
+                              int windowSize,
+                              int searchWindow)
+{
+    if (windowSize <= 0 || (windowSize % 2 == 0) ||
+        searchWindow <= 0 || (searchWindow % 2 == 0)) {
+        cerr << "Error: windowSize and searchWindow must be positive and odd" << endl;
+        exit(1);
+    }
+    if (h <= 0.0) {
+        cerr << "Error: h must be > 0" << endl;
+        exit(1);
+    }
+    int patchRad = windowSize / 2;
+    int searchRad = searchWindow / 2;
+
+    vector<unsigned char> output(width * height * 3, 0);
+    double h2 = h * h;
+
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+
+            double weightSum = 0.0;
+            double sumR = 0.0;
+            double sumG = 0.0;
+            double sumB = 0.0;
+
+            for (int rowOffset = -searchRad; rowOffset <= searchRad; rowOffset++) {
+                int nbrRow = clamp(row + rowOffset, 0, height - 1);
+
+                for (int colOffset = -searchRad; colOffset <= searchRad; colOffset++) {
+                    int nbrCol = clamp(col + colOffset, 0, width - 1);
+
+                    // patch distance between (row,col) and (nbrRow,nbrCol)
+                    double patchDist = 0.0;
+
+                    for (int prOffset = -patchRad; prOffset <= patchRad; prOffset++) {
+                        int r1 = clamp(row + prOffset, 0, height - 1);
+                        int r2 = clamp(nbrRow + prOffset, 0, height - 1);
+
+                        for (int pcOffset = -patchRad; pcOffset <= patchRad; pcOffset++) {
+                            int c1 = clamp(col + pcOffset, 0, width - 1);
+                            int c2 = clamp(nbrCol + pcOffset, 0, width - 1);
+
+                            int idx1 = (r1 * width + c1) * 3;
+                            int idx2 = (r2 * width + c2) * 3;
+
+                            for (int ch = 0; ch < 3; ch++) {
+                                double a = double(input[idx1 + ch]);
+                                double b = double(input[idx2 + ch]);
+                                double diff = a - b;
+                                patchDist += diff * diff;
+                            }
+                        }
+                    }
+                    double w = exp(-patchDist / h2);
+                    int nbrIdx = (nbrRow * width + nbrCol) * 3;
+                    sumR += w * double(input[nbrIdx + 0]);
+                    sumG += w * double(input[nbrIdx + 1]);
+                    sumB += w * double(input[nbrIdx + 2]);
+                    weightSum += w;
+                }
+            }
+
+            int outputIdx = (row * width + col) * 3;
+
+            int outR;
+            int outG;
+            int outB;
+            if (weightSum > 0.0) {
+                outR = (int)round(sumR / weightSum);
+                outG = (int)round(sumG / weightSum);
+                outB = (int)round(sumB / weightSum);
+            } else {
+                outR = (int)input[outputIdx + 0];
+                outG = (int)input[outputIdx + 1];
+                outB = (int)input[outputIdx + 2];
+            }
+            output[outputIdx + 0] = (unsigned char)clamp(outR, 0, 255);
+            output[outputIdx + 1] = (unsigned char)clamp(outG, 0, 255);
+            output[outputIdx + 2] = (unsigned char)clamp(outB, 0, 255);
+        }
+    }
+
+    return output;
+}
+
+//Main function
+int main(int argc, char** argv) {
+    if (argc < 9) {
+        cout << "Usage:\n"
+             << "  " << argv[0] << " og.raw noisy.raw out.raw width height medianK gauss gaussK sigma\n"
+             << "  " << argv[0] << " og.raw noisy.raw out.raw width height medianK nlm h windowSize searchWindow\n";
+        return 1;
+    }
+    string ogPath  = argv[1];
+    string noise = argv[2];
+    string outputPath   = argv[3];
+
+    int width = stoi(argv[4]);
+    int height = stoi(argv[5]);
+
+    int medianK = stoi(argv[6]);
+    string filter = argv[7];
+
+    if (medianK <= 0 || (medianK % 2 == 0)) {
+        cerr << "Error: medianK is not positive and odd" << endl;
+        return 1;
+    }
+
+    vector<unsigned char> og;
+    vector<unsigned char> no;
+
+    readraw(ogPath, og, width, height, 3);
+    readraw(noise, no, width, height, 3);
+
+    
+    vector<unsigned char> med = median(no, width, height, medianK);
+    vector<unsigned char> out;
+
+    if (filter == "gauss") {
+        if (argc < 10) {
+            cerr << "Error: Gaussian mode needs gaussK sigma" << endl;
+            return 1;
+        }
+
+        int gaussK = stoi(argv[8]);
+        double sigma = stod(argv[9]);
+
+        if (gaussK <= 0 || (gaussK % 2 == 0)) {
+            cerr << "Error: gaussK is not positive and odd" << endl;
+            return 1;
+        }
+        if (sigma <= 0.0) {
+            cerr << "Error: sigma must be greater than 0" << endl;
+            return 1;
+        }
+
+        // Step 2: Gaussian (Gaussian noise)
+        out = gaussColor(med, width, height, gaussK, sigma);
+
+    } else if (filter == "nlm") {
+        if (argc < 11) {
+            cerr << "Error: NLM mode needs h windowSize searchWindow" << endl;
+            return 1;
+        }
+
+        double h = stod(argv[8]);
+        int windowSize = stoi(argv[9]);
+        int searchWindow = stoi(argv[10]);
+
+        // Step 2: NLM (fine grain)
+        out = nlm(med, width, height, h, windowSize, searchWindow);
+
+    } else {
+        cerr << "Error: method must be 'gauss' or 'nlm'" << endl;
+        return 1;
+    }
+
+    writeraw(outputPath, out);
+
+    double psnrR, psnrG, psnrB, avg_psnr;
+    calc_psnr_color(og, out, width, height, psnrR, psnrG, psnrB, avg_psnr);
+
+    cout << "PSNR_R = " << psnrR << " dB" << endl;
+    cout << "PSNR_G = " << psnrG << " dB" << endl;
+    cout << "PSNR_B = " << psnrB << " dB" << endl;
+    cout << "PSNR_avg = " << avg_psnr << " dB" << endl;
+
+    return 0;
+}
+/*
+(1) Name: Agam Sidhu
+(2) USC ID: 3027948957
+(3) USC Email: agamsidh@usc.edu
+(4) Submission Date: February 1, 2026
+EE569 HW1 - Problem 3: Color Correction- Auto White Balancing (AWB)
+*/
+
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <iomanip>
+#include <cstdlib>
+
+using namespace std;
+// Clamp function
+static inline unsigned char clamp(double x) {
+    if (x < 0.0) return 0;
+    if (x > 255.0) return 255;
+    return static_cast<unsigned char>(x + 0.5);
+}
+
+//Read raw image function
+void readraw(const string& filename,
+             vector<unsigned char>& buffer,
+             int width,
+             int height,
+             int channels)
+{
+    int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Can't open input file " << filename << endl;
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+
+    if (!file) {
+        cerr << "Error: failed to read " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+//Write raw image function
+void writeraw(const string& filename,
+              const vector<unsigned char>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+
+    file.write(reinterpret_cast<const char*>(buffer.data()),
+               static_cast<streamsize>(buffer.size()));
+
+    if (!file) {
+        cerr << "Error: failed to write raw file " << filename << endl;
+        exit(1);
+    }
+
+    file.close();
+}
+
+void writeHisto(const string& filename,
+                       const vector<int>& bef_R,
+                       const vector<int>& bef_G,
+                       const vector<int>& bef_B,
+                       const vector<int>& aft_R,
+                       const vector<int>& aft_G,
+                       const vector<int>& aft_B)
+{
+    ofstream file(filename);
+    if (!file) {
+        cerr << "Error: Can't open histogra " << filename << endl;
+        exit(1);
+    }
+    file << "value,R_before,G_before,B_before,R_after,G_after,B_after\n";
+    for (int i = 0; i < 256; i++) {
+        file << i << ","
+             << bef_R[i] << ","
+             << bef_G[i] << ","
+             << bef_B[i] << ","
+             << aft_R[i] << ","
+             << aft_G[i] << ","
+             << aft_B[i] << "\n";
+    }
+    file.close();
+}
+// Function to get histogram of an RGB image
+void getHisto(const vector<unsigned char>& img,
+                      vector<int>& r,
+                      vector<int>& g,
+                      vector<int>& b)
+{
+    r.assign(256, 0);
+    g.assign(256, 0);
+    b.assign(256, 0);
+
+    int pixelCount = img.size() / 3;
+    for (int i = 0; i < pixelCount; i++) {
+        r[img[3*i + 0]]++;
+        g[img[3*i + 1]]++;
+        b[img[3*i + 2]]++;
+    }
+}
+// Main function
+int main(int argc, char* argv[]) {
+    if (argc != 5) {
+        cerr << "Usage: " << argv[0]
+             << " input.raw output.raw width height" << endl;
+        return 1;
+    }
+
+    const string inputPath  = argv[1];
+    const string outputPath = argv[2];
+    const int width  = atoi(argv[3]);
+    const int height = atoi(argv[4]);
+
+    if (width <= 0 || height <= 0) {
+        cerr << "Error: width & height needs to be positive." << endl;
+        return 1;
+    }
+
+    const int channels = 3;
+    const int dim = width * height;
+
+    vector<unsigned char> input;
+    readraw(inputPath, input, width, height, channels);
+    vector<unsigned char> output(input.size());
+    vector<int> bef_R, bef_G, bef_B;
+    getHisto(input, bef_R, bef_G, bef_B);
+
+    double rSum = 0.0;
+    double gSum = 0.0;
+    double bSum = 0.0;
+
+    for (int i = 0; i < dim; i++) {
+        rSum += input[3*i + 0];
+        gSum += input[3*i + 1];
+        bSum += input[3*i + 2];
+    }
+
+    const double rMean = rSum / static_cast<double>(dim);
+    const double gMean = gSum / static_cast<double>(dim);
+    const double bMean = bSum / static_cast<double>(dim);
+    const double mean  = (rMean + gMean + bMean) / 3.0;
+
+    const double eps = 1e-12;
+    double rVal, gVal, bVal;
+    if (rMean > eps) {
+        rVal = mean / rMean;
+    } else {
+        rVal = 1.0;
+    }
+
+    if (gMean > eps) {
+        gVal = mean / gMean;
+    } else {
+        gVal = 1.0;
+    }
+
+    if (bMean > eps) {
+        bVal = mean / bMean;
+    } else {
+        bVal = 1.0;
+    }
+
+    for (int i = 0; i < dim; i++) {
+        unsigned char R = input[3*i + 0];
+        unsigned char G = input[3*i + 1];
+        unsigned char B = input[3*i + 2];
+
+        output[3*i + 0] = clamp(rVal * static_cast<double>(R));
+        output[3*i + 1] = clamp(gVal * static_cast<double>(G));
+        output[3*i + 2] = clamp(bVal * static_cast<double>(B));
+    }
+
+    writeraw(outputPath, output);
+    vector<int> aft_R, aft_G, aft_B;
+    getHisto(output, aft_R, aft_G, aft_B);
+    /* 
+    writeHisto(
+        "../../Image_hw1/outputs/p3_histogram.csv",
+        bef_R, bef_G, bef_B,
+        aft_R,  aft_G,  aft_B
+    );
+    */
+
+    double rsum = 0.0, gsum = 0.0, bsum = 0.0;
+    for (int i = 0; i < dim; i++) {
+        rsum += output[3*i + 0];
+        gsum += output[3*i + 1];
+        bsum += output[3*i + 2];
+    }
+
+    const double rmean = rsum / static_cast<double>(dim);
+    const double gmean = gsum / static_cast<double>(dim);
+    const double bmean = bsum / static_cast<double>(dim);
+
+    cout << fixed << setprecision(4);
+    cout << "Before AWB means: muR=" << rMean
+         << ", muG=" << gMean
+         << ", muB=" << bMean << endl;
+    cout << "Target gray mean: mu=" << mean << endl;
+    cout << "Gains: aR=" << rVal
+         << ", aG=" << gVal
+         << ", aB=" << bVal << endl;
+    cout << "After AWB means:  muR=" << rmean
+         << ", muG=" << gmean
+         << ", muB=" << bmean << endl;
+    return 0;
+}
+#
+#(1) Name: Agam Sidhu
+#(2) USC ID: 3027948957
+#(3) USC Email: agamsidh@usc.edu
+#(4) Submission Date: February 1, 2026
+#EE569 HW1 - Problem 3: Color Correction- Auto White Balancing (AWB)
+#
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+
+YMAX = 15000
+YTICKS = list(range(0, YMAX + 1, 2500))
+
+LABELS = ["Red", "Green", "Blue"]
+COLORS = ["red", "green", "blue"]
+
+def readraw(filename, width, height):
+    with open(filename, 'rb') as f:
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    return data.reshape((height, width, 3))
+
+def channelHist(img, channel):
+    return np.histogram(
+        img[:, :, channel].flatten(),
+        bins=256,
+        range=(0, 255)
+    )[0]
+
+if len(sys.argv) != 5:
+    print("Usage:")
+    print("  python3 plot_p3_before_after.py before.raw after.raw width height")
+    sys.exit(1)
+
+before_path = sys.argv[1]
+after_path  = sys.argv[2]
+width  = int(sys.argv[3])
+height = int(sys.argv[4])
+
+before = readraw(before_path, width, height)
+after  = readraw(after_path,  width, height)
+
+plt.figure(figsize=(10, 8))
+
+for i in range(3):
+    before_hist = channelHist(before, i)
+    after_hist  = channelHist(after,  i)
+
+    axis1 = plt.subplot(3, 2, 2*i + 1)
+    axis1.bar(range(256), before_hist, color=COLORS[i], width=1.0)
+    axis1.set_title(f"{LABELS[i]} Channel - Before AWB")
+    axis1.set_xlim(0, 255)
+    axis1.set_ylim(0, YMAX)
+    axis1.set_yticks(YTICKS)
+    axis1.set_xlabel("Intensity")
+    axis1.set_ylabel("Count")
+
+    
+    axis2 = plt.subplot(3, 2, 2*i + 2)
+    axis2.bar(range(256), after_hist, color=COLORS[i], width=1.0)
+    axis2.set_title(f"{LABELS[i]} Channel - After AWB")
+    axis2.set_xlim(0, 255)
+    axis2.set_ylim(0, YMAX)
+    axis2.set_yticks(YTICKS)
+    axis2.set_xlabel("Intensity")
+    axis2.set_ylabel("Count")
+
+plt.tight_layout()
+plt.show()
