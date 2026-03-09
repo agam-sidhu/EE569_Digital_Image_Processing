@@ -1,5 +1,10 @@
-// p1b.cpp - Canny Edge Detector using OpenCV (EE569 HW2)
-// Author: Agam Sidhu
+/* EE569 Homework #1
+ * Name: Agam Sidhu
+ * USC ID: 3027948957
+ * USC Email: agamsidh@usc.edu
+ * Submission Date: February 22, 2026
+ * Problem 1(b): Canny Edge Detection on Grayscale
+ */
 
 #include <opencv2/opencv.hpp>
 #include <fstream>

@@ -1,8 +1,10 @@
-// p1a.cpp - Sobel Edge Detector (EE569 HW2 P1a)
-// Name:
-// USC ID:
-// USC Email:
-// Submission Date:
+/* EE569 Homework #2
+ * Name: Agam Sidhu
+ * USC ID: 3027948957
+ * USC Email: agamsidh@usc.edu
+ * Submission Date: February 22, 2026
+ * Problem 1(a): Sobel Edge Detection on Grayscale
+ */
 
 #include <cmath>
 #include <cstdint>

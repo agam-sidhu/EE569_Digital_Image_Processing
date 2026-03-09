@@ -1,219 +1,408 @@
-clc; clear; close all;
+function p1d(imgSel)
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 1(d): Evaluation of Edge Detectors against Human GT
+if nargin < 1, imgSel = "ALL"; end
+imgSel = string(imgSel);
 
-% ============================================================
-% EE569 HW2 - Problem 1(d): Quantitative Evaluation
-% Uses Ground Truth (.mat) and edge maps (Sobel/Canny/SE)
-% Folder structure (relative to this script):
-%   p1d/
-%     p1d_eval_edges.m
-%     edges/  (generated edge maps)
-%     gt/     (ground truth .mat files)
-% ============================================================
+clc;
 
-% ---- Paths (relative to p1d/) ----
-gtDir   = 'gt';
-edgeDir = 'edges';
+%Set input folder
+edge_inp = "edges";
+gt_inp   = "gt";
 
-% ---- Images + corresponding GT files (your exact names) ----
-images = { ...
-  struct('name','Bird', 'gtMat', fullfile(gtDir,'Bird_GT.mat')), ...
-  struct('name','Deer', 'gtMat', fullfile(gtDir,'Deer_GT.mat')) ...
-};
+%Set output folder
+outp = "eval_out_p1d_manual";
+if ~exist(outp,'dir')
+    mkdir(outp);
+end
 
-% ---- Detectors + your exact edge filenames ----
-% For Sobel and Canny you currently have binary edge maps (PNG).
-% For SE you have a probability map (PNG) which supports threshold sweep.
-detectors = { ...
-  struct('label','Sobel', 'filePattern','%s_edge_T25.png'), ...
-  struct('label','Canny', 'filePattern','%s_canny_L60_H180.png'), ...
-  struct('label','SE',    'filePattern','%s_SE_prob.png') ...
-};
+%Command to set plot output folder
+plotp = fullfile(outp, "plots");
+if ~exist(plotp,'dir')
+    mkdir(plotp);
+end
 
-% ---- Threshold sweep range ----
-thrs = 0.00:0.01:1.00;
+%Command to set SE thresholds
+se_thrs = [0.15 0.25 0.35];
 
-% ---- Matching tolerance for correspondPixels (BSDS-style) ----
-% Standard approach uses a distance proportional to image diagonal.
-tolFrac = 0.0075;
+fprintf("HW2 P1(d):\n");
 
-% ---- Output folder for plots and CSV tables ----
-outDir = fullfile('eval_out');
-if ~exist(outDir,'dir'), mkdir(outDir); end
+%Command to run Bird evals
+if imgSel == "ALL" || imgSel == "Bird"
+    cfg.gt_mat = fullfile(gt_inp, "Bird_GT.mat");
+    eval_img("Bird", cfg, edge_inp, se_thrs, outp, plotp);
+end
 
-% ============================================================
-% MAIN LOOP
-% ============================================================
-for d = 1:numel(detectors)
-  det = detectors{d};
+%Command to run Deer evals
+if imgSel == "ALL" || imgSel == "Deer"
+    cfg.gt_mat = fullfile(gt_inp, "Deer_GT.mat");
+    eval_img("Deer", cfg, edge_inp, se_thrs, outp, plotp);
+end
 
-  fprintf('\n=========================================\n');
-  fprintf('Detector: %s\n', det.label);
-  fprintf('=========================================\n');
+fprintf("\nDone. Output File: %s\n", outp);
+end
 
-  for im = 1:numel(images)
-    info = images{im};
+function eval_img(imgName, cfg, edge_inp, se_thrs, outp, plotp)
 
-    % ----- Load GT -----
-    gtData = load(info.gtMat);
-    groundTruth = extractGroundTruth(gtData); % 1x5 cell expected
+%Command to split GT
+gt_outp = fullfile(outp, "tmp_gt");
+gtFiles = make_gt_splits_once(cfg.gt_mat, gt_outp, imgName);
+nGT = numel(gtFiles);
 
-    % ----- Load edge "strength" map E in [0,1] -----
-    edgePath = fullfile(edgeDir, sprintf(det.filePattern, info.name));
-    E = loadEdgeStrength(edgePath);
+%Command to get Sobel maps
+[sobel_files, sobelT] = pick_sobel(edge_inp, imgName);
 
-    % ==========================================================
-    % (1) Precision/Recall table for each GT at ONE chosen threshold
-    % For SE, pick a fixed example threshold (matches your 1c writeup)
-    % For Sobel/Canny, the PNG is likely already binary, but thresholding still works.
-    % ==========================================================
-    Tfixed = 0.20;
-    Eb = E >= Tfixed;
+%Command to get Canny maps
+[canny_files, cannyT] = pick_canny(edge_inp, imgName);
 
-    [P_each, R_each, Pmean, Rmean, F] = evalPRF_forAllGT(Eb, groundTruth, tolFrac);
+%Command to grt SE map
+seProb = fullfile(edge_inp, imgName + "_SE_prob.png");
+if ~exist(seProb,'file')
+    error("[%s] Missing SE prob map: %s", imgName, seProb);
+end
 
-    fprintf('\nImage: %s | Fixed threshold T = %.2f\n', info.name, Tfixed);
-    fprintf('GT#   Precision   Recall\n');
-    for k = 1:numel(P_each)
-      fprintf('%d     %0.4f     %0.4f\n', k, P_each(k), R_each(k));
+%Part 1 CSV outputs + Part 2 CVS
+sobel = fullfile(outp, sprintf("%s_Sobel_perGT.csv", imgName));
+canny = fullfile(outp, sprintf("%s_Canny_perGT.csv", imgName));
+struct = fullfile(outp, sprintf("%s_SE_perGT.csv", imgName));
+summary = fullfile(outp, sprintf("%s_summary.csv", imgName));
+sobelThrs = fullfile(outp, sprintf("%s_Sobel_thresholdTable.csv", imgName));
+cannyThrs = fullfile(outp, sprintf("%s_Canny_thresholdTable.csv", imgName));
+structThrs = fullfile(outp, sprintf("%s_SE_thresholdTable.csv", imgName));
+
+%Command to run Sobel
+[PRgt_s, thr_s] = eval_binary_set(imgName, "Sobel", sobel_files, gtFiles, "T", sobelT);
+write_perGT(sobel, PRgt_s);
+write_thres(sobelThrs, thr_s);
+
+%Command to calc Sobel metrics
+Ps = mean(PRgt_s(:,1));
+Rs = mean(PRgt_s(:,2));
+Fs = f_measure(Ps, Rs);
+
+%Command to run Canny 
+[PRgt_c, thr_c] = eval_binary_set(imgName, "Canny", canny_files, gtFiles, "pair", cannyT);
+write_perGT(canny, PRgt_c);
+write_thres(cannyThrs, thr_c);
+
+%Command to calc Canny metrics
+Pc = mean(PRgt_c(:,1));
+Rc = mean(PRgt_c(:,2));
+Fc = f_measure(Pc, Rc);
+
+%Command to run SE
+[PRgt_e, thr_e] = eval_probmap(imgName, "SE", seProb, se_thrs, gtFiles);
+write_perGT(struct, PRgt_e);
+write_thres(structThrs, thr_e);
+
+%Command to calc SE metrics
+Pe = mean(PRgt_e(:,1));
+Re = mean(PRgt_e(:,2));
+Fe = f_measure(Pe, Re);
+
+%Write summary 
+sumTbl = strings(3,4);
+sumTbl(1,:) = ["Sobel", fmt(Ps), fmt(Rs), fmt(Fs)];
+sumTbl(2,:) = ["Canny", fmt(Pc), fmt(Rc), fmt(Fc)];
+sumTbl(3,:) = ["SE",    fmt(Pe), fmt(Re), fmt(Fe)];
+write_sum(summary, sumTbl);
+end
+
+function [PR_gt, thr] = eval_binary_set(imgName, app, files, gtFiles, thrKind, thrLab)
+K = numel(files);
+nGT = numel(gtFiles);
+
+P_all = zeros(K, nGT);
+R_all = zeros(K, nGT);
+
+%Command to loop over thresholds
+for k = 1:K
+    fprintf("[%s - %s] Thres Value %d / %d\n", imgName, app, k, K);
+    Eb = read_raw_as_binary_uint8(files(k), 481, 321);
+
+    %Command to loop over GT maps
+    for i = 1:nGT
+        fprintf("GT %d / %d\n", i, nGT);
+        [P, R] = evalPR_exact(Eb, gtFiles(i));
+        P_all(k,i) = P;
+        R_all(k,i) = R;
     end
-    fprintf('Mean  %0.4f     %0.4f\n', Pmean, Rmean);
-    fprintf('F     %0.4f\n', F);
+end
 
-    % Save table to CSV
-    csvPath = fullfile(outDir, sprintf('%s_%s_PR_table_T%.2f.csv', info.name, det.label, Tfixed));
-    writePRTableCSV(csvPath, P_each, R_each, Pmean, Rmean, F);
+%Command to calc GT mean across thresholds
+PR_gt = zeros(nGT,2);
+for i = 1:nGT
+    PR_gt(i,1) = mean(P_all(:,i));
+    PR_gt(i,2) = mean(R_all(:,i));
+end
 
-    % ==========================================================
-    % (2) F-measure vs Threshold curve
-    % This is most meaningful for SE (probability map).
-    % For binary Sobel/Canny maps, curve may be mostly flat.
-    % ==========================================================
-    Fcurve = zeros(size(thrs));
-    Pcurve = zeros(size(thrs));
-    Rcurve = zeros(size(thrs));
+%Command to group threshold data
+thr.app = app;
+thr.K = K;
+thr.nGT = nGT;
+thr.P_all = P_all;
+thr.R_all = R_all;
 
-    for t = 1:numel(thrs)
-      Eb_t = E >= thrs(t);
-      [~, ~, Pm, Rm, Ft] = evalPRF_forAllGT(Eb_t, groundTruth, tolFrac);
-      Pcurve(t) = Pm;
-      Rcurve(t) = Rm;
-      Fcurve(t) = Ft;
+%Command to build threshold labels
+thr.thrLabel = strings(K,1);
+for k = 1:K
+    if thrKind == "T"
+        thr.thrLabel(k) = "T" + string(thrLab(k));
+    else
+        thr.thrLabel(k) = string(thrLab(k));
     end
-
-    [Fbest, idxBest] = max(Fcurve);
-    thrBest = thrs(idxBest);
-
-    fprintf('Threshold sweep (%s): best F = %0.4f at T = %0.2f\n', info.name, Fbest, thrBest);
-
-    % Plot F vs threshold
-    fig = figure('Visible','on');
-    plot(thrs, Fcurve, 'LineWidth', 1.5);
-    xlabel('Threshold T');
-    ylabel('F-measure');
-    title(sprintf('%s: F vs Threshold (%s)', det.label, info.name));
-    grid on;
-
-    outPlot = fullfile(outDir, sprintf('%s_%s_Fcurve.png', info.name, det.label));
-    saveas(fig, outPlot);
-
-    % Also save curve values
-    curveCSV = fullfile(outDir, sprintf('%s_%s_Fcurve.csv', info.name, det.label));
-    writeCurveCSV(curveCSV, thrs, Pcurve, Rcurve, Fcurve, Fbest, thrBest);
-
-    close(fig);
-  end
 end
 
-fprintf('\nDone. Outputs saved in: %s\n', outDir);
+%Compute mean P R and F for each threshold
+thr.meanP = mean(P_all, 2);
+thr.meanR = mean(R_all, 2);
+thr.F = arrayfun(@(a,b) f_measure(a,b), thr.meanP, thr.meanR);
+end
 
-% ============================================================
-% HELPER FUNCTIONS
-% ============================================================
+function [PR_gt, thr] = eval_probmap(imgName, app, prob_file, thrs, gtFiles)
+Eprob = read_png(prob_file);
 
-function groundTruth = extractGroundTruth(gtData)
-  % Standard BSDS format: gtData.groundTruth (cell array)
-  if isfield(gtData, 'groundTruth')
-    groundTruth = gtData.groundTruth;
-    return;
-  end
+K = numel(thrs);
+nGT = numel(gtFiles);
+P_all = zeros(K, nGT);
+R_all = zeros(K, nGT);
 
-  % Sometimes different field name but same structure
-  fn = fieldnames(gtData);
-  for i = 1:numel(fn)
-    val = gtData.(fn{i});
-    if iscell(val) && ~isempty(val) && isstruct(val{1}) && isfield(val{1}, 'Boundaries')
-      groundTruth = val;
-      return;
+%Command to loop over thresholds
+for k = 1:K
+    Eb = uint8(Eprob >= thrs(k));
+    for i = 1:nGT
+        [P, R] = evalPR_exact(Eb, gtFiles(i));
+        P_all(k,i) = P;
+        R_all(k,i) = R;
     end
-  end
-  error('Could not find groundTruth cell array in the GT .mat file.');
 end
 
-function E = loadEdgeStrength(path)
-  if ~exist(path,'file')
-    error('Edge file not found: %s', path);
-  end
-
-  img = imread(path);
-  if ndims(img) == 3
-    img = img(:,:,1);
-  end
-  E = double(img) / 255.0;
-
-  % Clamp
-  E(E < 0) = 0;
-  E(E > 1) = 1;
+%Command to compute per-GT mean across thresholds
+PR_gt = zeros(nGT,2);
+for i = 1:nGT
+    PR_gt(i,1) = mean(P_all(:,i));
+    PR_gt(i,2) = mean(R_all(:,i));
 end
 
-function [P_each, R_each, Pmean, Rmean, F] = evalPRF_forAllGT(Eb, groundTruth, tolFrac)
-  nGT = numel(groundTruth);
-  P_each = zeros(nGT,1);
-  R_each = zeros(nGT,1);
+%Command to group threshold data
+thr.app = app;
+thr.K = K;
+thr.nGT = nGT;
+thr.P_all = P_all;
+thr.R_all = R_all;
 
-  for i = 1:nGT
-    G = logical(groundTruth{i}.Boundaries);
-    [P_each(i), R_each(i)] = evalPR_oneGT(Eb, G, tolFrac);
-  end
-
-  Pmean = mean(P_each);
-  Rmean = mean(R_each);
-  F = (2 * Pmean * Rmean) / (Pmean + Rmean + eps);
+%Command to build threshold labels
+thr.thrLabel = strings(K,1);
+for k = 1:K
+    thr.thrLabel(k) = sprintf("thr=%.2f", thrs(k));
 end
 
-function [P, R] = evalPR_oneGT(Eb, G, tolFrac)
-  [h,w] = size(G);
-  maxDist = tolFrac * sqrt(double(h*h + w*w));
-
-  % Requires pdollar/edges on path
-  [m1, m2] = correspondPixels(Eb, G, maxDist);
-
-  TP = sum(m1(:));
-  FP = sum(Eb(:)) - TP;
-  FN = sum(G(:)) - sum(m2(:));
-
-  P = TP / (TP + FP + eps);
-  R = TP / (TP + FN + eps);
+%Compute mean P R and F for each threshold
+thr.meanP = mean(P_all, 2);
+thr.meanR = mean(R_all, 2);
+thr.F = arrayfun(@(a,b) f_measure(a,b), thr.meanP, thr.meanR);
 end
 
-function writePRTableCSV(csvPath, P_each, R_each, Pmean, Rmean, F)
-  fid = fopen(csvPath,'w');
-  fprintf(fid, 'GT,Precision,Recall\n');
-  for k = 1:numel(P_each)
-    fprintf(fid, '%d,%0.6f,%0.6f\n', k, P_each(k), R_each(k));
-  end
-  fprintf(fid, 'Mean,%0.6f,%0.6f\n', Pmean, Rmean);
-  fprintf(fid, 'F-measure,%0.6f,\n', F);
-  fclose(fid);
+function [P, R] = evalPR_exact(Eb_uint8, gtFile)
+
+Eb = (Eb_uint8 > 0);
+S = load(char(gtFile));
+gt1 = S.groundTruth{1};
+
+%Command to get boundary map
+if isfield(gt1, 'Boundaries')
+    G = (gt1.Boundaries > 0);
+else
+    error("GT missing'Bounds' in %s", gtFile);
 end
 
-function writeCurveCSV(csvPath, thrs, Pcurve, Rcurve, Fcurve, Fbest, thrBest)
-  fid = fopen(csvPath,'w');
-  fprintf(fid, 'T,MeanPrecision,MeanRecall,MeanF\n');
-  for i = 1:numel(thrs)
-    fprintf(fid, '%0.2f,%0.6f,%0.6f,%0.6f\n', thrs(i), Pcurve(i), Rcurve(i), Fcurve(i));
-  end
-  fprintf(fid, 'Best,,,\n');
-  fprintf(fid, 'BestT,%0.2f,,\n', thrBest);
-  fprintf(fid, 'BestF,,,%0.6f\n', Fbest);
-  fclose(fid);
+%Calc TP FP FN
+TP = sum(Eb(:) & G(:));
+FP = sum(Eb(:) & ~G(:));
+FN = sum(~Eb(:) & G(:));
+
+%Calc precision
+if (TP + FP) == 0
+    P = 0;
+else
+    P = TP / (TP + FP);
+end
+
+%Calc recall
+if (TP + FN) == 0
+    R = 0;
+else
+    R = TP / (TP + FN);
+end
+end
+
+function [files, sobelT] = pick_sobel(folder, imgName)
+
+%Command to list Sobel files
+d = dir(fullfile(folder, imgName + "_edge_T*.raw"));
+if isempty(d)
+    error("[%s] No Sobel files found: %s", imgName, fullfile(folder, imgName + "_edge_T*.raw"));
+end
+
+%Command to sort files
+names = sort(string({d.name}));
+files = fullfile(folder, names);
+
+%Command to parse threshold values
+Tvals = zeros(numel(names),1);
+for i = 1:numel(names)
+    tok = regexp(names(i), "_T(\d+)\.raw$", "tokens", "once");
+    if isempty(tok)
+        Tvals(i) = i;
+    else
+        Tvals(i) = str2double(tok{1});
+    end
+end
+sobelT = Tvals;
+end
+
+function [files, cannyT] = pick_canny(folder, imgName)
+
+%Command to list Canny files
+d = dir(fullfile(folder, imgName + "_canny_L*_H*.raw"));
+
+%Command to sort files
+names = sort(string({d.name}));
+files = fullfile(folder, names);
+
+%Command to parse low/high labels
+cannyT = strings(numel(names),1);
+for i = 1:numel(names)
+    tok = regexp(names(i), "_L(\d+)_H(\d+)\.raw$", "tokens", "once");
+    if isempty(tok)
+        cannyT(i) = "pair" + string(i);
+    else
+        cannyT(i) = "L" + tok{1} + "_H" + tok{2};
+    end
+end
+end
+
+function gtFiles = make_gt_splits_once(gt_mat_path, tmp_dir, prefix)
+
+if ~exist(tmp_dir, 'dir')
+    mkdir(tmp_dir);
+end
+
+%Command to load GT mat
+S = load(gt_mat_path);
+if ~isfield(S,'groundTruth')
+    error("GT mat missing 'groundTruth': %s", gt_mat_path);
+end
+
+%Command to split GT cell array
+GTcell = S.groundTruth;
+nGT = numel(GTcell);
+gtFiles = strings(nGT,1);
+
+for i = 1:nGT
+    gtFiles(i) = fullfile(tmp_dir, sprintf("%s_GT%d.mat", prefix, i));
+    if ~exist(gtFiles(i), 'file')
+        groundTruth = {GTcell{i}}; 
+        save(char(gtFiles(i)), 'groundTruth');
+    end
+end
+end
+
+function E = read_png(path)
+
+%Command to read prob PNG 
+I = imread(path);
+if ndims(I) == 3
+    I = rgb2gray(I);
+end
+E = double(I);
+if max(E(:)) > 1
+    E = E / 255.0;
+end
+E = max(0, min(1, E));
+end
+
+function Eb = read_raw_as_binary_uint8(path, width, height)
+
+%Command to read RAW file
+filesDir = fopen(path,'rb');
+if filesDir < 0
+    error("Cannot open inoput file %s", path);
+end
+
+I = fread(filesDir, width*height, 'uint8=>uint8');
+fclose(filesDir);
+
+I = reshape(I, [width height])';
+
+%Convert RAW 
+Eb = uint8(I < 128);
+end
+
+function write_perGT(csv_path, PR_gt)
+
+%Command to write Per-GT CSV file
+filesDir = fopen(csv_path, 'w');
+fprintf(filesDir, "GT,MeanPrecision,MeanRecall\n");
+for i = 1:size(PR_gt,1)
+    fprintf(filesDir, "GT%d,%.6f,%.6f\n", i, PR_gt(i,1), PR_gt(i,2));
+end
+fclose(filesDir);
+end
+
+function write_sum(csv_path, summary)
+
+%Write summary file
+filesDir = fopen(csv_path, 'w');
+fprintf(filesDir, "Method,MeanPrecision,MeanRecall,Fmeasure\n");
+for i = 1:size(summary,1)
+    fprintf(filesDir, "%s,%s,%s,%s\n", summary(i,1), summary(i,2), summary(i,3), summary(i,4));
+end
+fclose(filesDir);
+end
+
+function write_thres(csv_path, thr)
+
+%Write threshold table
+K = thr.K;
+nGT = thr.nGT;
+
+filesDir = fopen(csv_path, 'w');
+fprintf(filesDir, "Threshold,MeanP,MeanR,F");
+for i = 1:nGT
+    fprintf(filesDir, ",GT%d_P,GT%d_R", i, i);
+end
+fprintf(filesDir, "\n");
+
+for k = 1:K
+    fprintf(filesDir, "%s,%.6f,%.6f,%.6f", thr.thrLabel(k), thr.meanP(k), thr.meanR(k), thr.F(k));
+    for i = 1:nGT
+        fprintf(filesDir, ",%.6f,%.6f", thr.P_all(k,i), thr.R_all(k,i));
+    end
+    fprintf(filesDir, "\n");
+end
+
+fclose(filesDir);
+end
+
+function F = f_measure(P,R)
+
+%Command to compute F-measure
+if (P + R) == 0
+    F = 0;
+else
+    num = 2 * P * R;
+    denom = P + R;
+    F = num/ denom;
+end
+end
+
+function s = fmt(x)
+
+%Command to format numeric values
+s = string(sprintf("%.6f", x));
 end

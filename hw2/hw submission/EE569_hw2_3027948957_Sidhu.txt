@@ -1,0 +1,1295 @@
+/* EE569 Homework #2
+ * Name: Agam Sidhu
+ * USC ID: 3027948957
+ * USC Email: agamsidh@usc.edu
+ * Submission Date: February 22, 2026
+ * Problem 1(a): Sobel Edge Detection on Grayscale
+ */
+
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <algorithm>
+
+using namespace std;
+
+//Read raw image function
+static void readraw(const string& filename,
+                    vector<uint8_t>& buffer,
+                    int width,
+                    int height,
+                    int channels)
+{
+    const int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open input file " << filename << endl;
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+    if (!file) {
+        cerr << "Error: failed to read expected bytes from " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+
+//Write raw image function
+static void writeraw(const string& filename,
+                     const vector<uint8_t>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file " << filename << endl;
+        exit(1);
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data()),
+               static_cast<streamsize>(buffer.size()));
+    if (!file) {
+        cerr << "Error: failed to write output file " << filename << endl;
+        exit(1);
+    }
+    file.close();
+}
+
+//Clamp function
+static inline int clamp(int x, int low, int high) {
+    if (x < low) {
+        return low;
+    } else if (x > high) {
+        return high;
+    } else {
+        return x;
+    }
+}
+//Getting base name function
+static string getBaseName(const string& filePath) {
+    string fileName = filePath;
+
+    size_t lastSlash = fileName.find_last_of("/\\");
+    if (lastSlash != string::npos) {
+        fileName = fileName.substr(lastSlash + 1);
+    }
+
+    size_t lastDot = fileName.find_last_of('.');
+    if (lastDot != string::npos) {
+        fileName = fileName.substr(0, lastDot);
+    }
+    return fileName;
+}
+
+//Normalize Function
+static vector<uint8_t> normalizeMinMax(const vector<float>& input) {
+    float minVal = input[0];
+    float maxVal = input[0];
+
+    for (float value : input) {
+        if (value < minVal){
+            minVal = value; 
+        } 
+        if (value > maxVal){
+            maxVal = value;
+        }
+    }
+    vector<uint8_t> output(input.size(), 0);
+
+    if (fabs(maxVal - minVal) < 1e-12f) {
+        return output;
+    }
+    for (size_t i = 0; i < input.size(); i++) {
+        float norm = (input[i] - minVal) / (maxVal - minVal);
+        int pixelVal = (int)lroundf(norm * 255.0f);
+        output[i] = (uint8_t)clamp(pixelVal, 0, 255);
+    }
+    return output;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 6) {
+        cerr << "Usage:\n"
+             << "  " << argv[0] << " <input_rgb_raw> <output> <width> <height> <percent>\n\n"
+             << "Example:\n"
+             << "  " << argv[0] << " hw2/images/Bird.raw hw2/outputs/p1/p1a 481 321 20\n";
+        return 1;
+    }
+
+    const string input = argv[1];
+    const string output = argv[2];
+    const int width  = atoi(argv[3]);
+    const int height = atoi(argv[4]);
+    const float percent = (float)atof(argv[5]);
+
+    if (width <= 0 || height <= 0) {
+        cerr << "Error: invalid width or height.\n";
+        return 1;
+    }
+    if (percent < 0.0f || percent > 100.0f) {
+        cerr << "Error: Percent is not in [0,100].\n";
+        return 1;
+    }
+    vector<uint8_t> rgb;
+    readraw(input, rgb, width, height, 3);
+
+    const int numPixels = width * height;
+
+    vector<uint8_t> gray(numPixels, 0);
+    for (int i = 0; i < numPixels; i++) {
+        const uint8_t R = rgb[3*i + 0];
+        const uint8_t G = rgb[3*i + 1];
+        const uint8_t B = rgb[3*i + 2];
+        float y = 0.2989f * (float)R + 0.5870f * (float)G + 0.1140f * (float)B;
+        int yi = (int)lroundf(y);
+        gray[i] = (uint8_t)clamp(yi, 0, 255);
+    }
+    const int xVal[3][3] = {
+        { -1,  0,  1},
+        { -2,  0,  2},
+        { -1,  0,  1}
+    };
+    const int yVal[3][3] = {
+        {  1,  2,  1},
+        {  0,  0,  0},
+        { -1, -2, -1}
+    };
+
+    vector<float> gx(numPixels, 0.0f), gy(numPixels, 0.0f), mag(numPixels, 0.0f);
+
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            int xSum = 0;
+            int ySum = 0;
+            for (int j = -1; j <= 1; j++) {
+                for (int i = -1; i <= 1; i++) {
+                    int xx = clamp(col + i, 0, width - 1);
+                    int yy = clamp(row + j, 0, height - 1);
+                    uint8_t pixel = gray[yy * width + xx];
+                    xSum += xVal[j+1][i+1] * (int)pixel;
+                    ySum += yVal[j+1][i+1] * (int)pixel;
+                }
+            }
+            int idx = row * width + col;
+            gx[idx] = (float)xSum;
+            gy[idx] = (float)ySum;
+            mag[idx] = sqrtf(gx[idx]*gx[idx] + gy[idx]*gy[idx]);
+        }
+    }
+
+    vector<uint8_t> gxNorm = normalizeMinMax(gx);
+    vector<uint8_t> gyNorm = normalizeMinMax(gy);
+    vector<uint8_t> magNorm = normalizeMinMax(mag);
+
+    const int T = (int)lroundf((percent / 100.0f) * 255.0f);
+    vector<uint8_t> edge(numPixels, 255);
+    for (int i = 0; i < numPixels; i++) {
+        if ((int)magNorm[i] >= T) edge[i] = 0;
+        else edge[i] = 255;
+    }
+    const string stem = getBaseName(input);
+
+    writeraw(output + "/" + stem + "_gray.raw", gray);
+    writeraw(output + "/" + stem + "_gx.raw", gxNorm);
+    writeraw(output + "/" + stem + "_gy.raw", gyNorm);
+    writeraw(output + "/" + stem + "_mag.raw", magNorm);
+
+    int t = (int)lroundf(percent);
+    writeraw(output + "/" + stem + "_edge_T" + to_string(t) + ".raw", edge);
+    cout << "Wrote outputs to: " << output << "\n";
+    cout << "Threshold (percent): " << percent << " -> T=" << T << " on [0,255] magnitude\n";
+    return 0;
+}
+/* EE569 Homework #1
+ * Name: Agam Sidhu
+ * USC ID: 3027948957
+ * USC Email: agamsidh@usc.edu
+ * Submission Date: February 22, 2026
+ * Problem 1(b): Canny Edge Detection on Grayscale
+ */
+
+#include <opencv2/opencv.hpp>
+#include <fstream>
+#include <iostream>
+#include <vector>
+#include <string>
+
+using namespace std;
+using namespace cv;
+
+//Read raw image function
+static void readraw(const string& filename,
+                    vector<uint8_t>& buffer,
+                    int width,
+                    int height,
+                    int channels)
+{
+    int byteCount = width * height * channels;
+    buffer.resize(byteCount);
+
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open input file\n";
+        exit(1);
+    }
+    file.read(reinterpret_cast<char*>(buffer.data()), byteCount);
+    file.close();
+}
+//Write raw image function
+static void writeraw(const string& filename,
+                     const vector<uint8_t>& buffer)
+{
+    ofstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error: cannot open output file\n";
+        exit(1);
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data()),
+               buffer.size());
+    file.close();
+}
+//Clamp function
+static inline int clamp(int x, int low, int high) {
+    if (x < low) {
+        return low;
+    } else if (x > high) {
+        return high;
+    } else {
+        return x;
+    }
+}
+//Getting base name function
+static string getBaseName(const string& filePath) {
+    string fileName = filePath;
+
+    size_t lastSlash = fileName.find_last_of("/\\");
+    if (lastSlash != string::npos) {
+        fileName = fileName.substr(lastSlash + 1);
+    }
+
+    size_t lastDot = fileName.find_last_of('.');
+    if (lastDot != string::npos) {
+        fileName = fileName.substr(0, lastDot);
+    }
+    return fileName;
+}
+
+int main(int argc, char* argv[])
+{
+    if (argc < 8) {
+        cerr << "Usage:\n"
+             << "  " << argv[0]
+             << " <input_rgb_raw> <output> <width> <height> <low> <high> <sigmaVal>\n\n"
+             << "Example:\n"
+             << "  " << argv[0]
+             << " hw2/images/Bird.raw hw2/outputs/p1/p1b 481 321 50 150 1.0\n";
+        return 1;
+    }
+
+    const string input = argv[1];
+    const string output = argv[2];
+    const int width = atoi(argv[3]);
+    const int height = atoi(argv[4]);
+    const int low = atoi(argv[5]);
+    const int high = atoi(argv[6]);
+    const double sigmaVal = atof(argv[7]); 
+
+    if (width <= 0 || height <= 0) {
+        cerr << "Error: invalid image dimensions.\n";
+        return 1;
+    }
+    if (low < 0 || high < 0 || low >= high) {
+        cerr << "Error, Wrong Canny threshold.\n";
+        return 1;
+    }
+    vector<uint8_t> rgb;
+    readraw(input, rgb, width, height, 3);
+
+    Mat gray(height, width, CV_8UC1);
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            int idx = 3 * (row * width + col);
+
+            uint8_t R = rgb[idx];
+            uint8_t G = rgb[idx + 1];
+            uint8_t B = rgb[idx + 2];
+            int Y = (int)lround(0.2989 * R + 0.5870 * G + 0.1140 * B);
+            gray.at<uint8_t>(row, col) = (uint8_t)clamp(Y, 0, 255);
+        }
+    }
+
+    Mat cEdges;
+    Canny(gray, cEdges, low, high, 3, true);
+    vector<uint8_t> edge(width * height, 255);
+
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            if (cEdges.at<uint8_t>(row, col) != 0) {
+                edge[row * width + col] = 0;
+            }
+        }
+    }
+
+    const string baseName = getBaseName(input);
+    const string out =
+        output + "/" + baseName +
+        "_canny_L" + to_string(low) +
+        "_H" + to_string(high) + ".raw";
+    writeraw(out, edge);
+
+    cout << "Wrote: " << out << endl;
+    cout << "Canny thresholds: L=" << low
+         << ", H=" << high
+         << ", sigma=" << sigmaVal << endl;
+
+    return 0;
+}
+function p1c()
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 1(c): Structured Edge Detection with SE-Forest
+clc; clear; close all;
+
+edgePath = fileparts(which('edgesDetect'));
+modelPath = fullfile(edgePath,'models','forest','modelBsds');
+
+m = load(modelPath);
+model = m.model;
+model.opts.nms = 1;
+
+inp  = 'input';
+outp = 'output';
+mkdir(outp);
+images = {'Bird.jpg','Deer.jpg'};
+percent = [0.15 0.20 0.25];
+
+for img= images
+    imageRun(img{1}, inp, outp, model, percent);
+end
+end
+
+function imageRun(filename, inp, outp, model, percent)
+rgb = imread(fullfile(inp, filename));
+iVal = single(rgb)/255;
+edgeProb = edgesDetect(iVal, model);
+[~,base] = fileparts(filename);
+imwrite(uint8(edgeProb * 255), fullfile(outp, sprintf('%s_SE_prob.png', base)));
+for t = percent
+    binary = edgeProb >= t;
+    imwrite(uint8(binary) * 255, fullfile(outp, sprintf('%s_SE_bin_T%.2f.png', base, t)));
+end
+fprintf('Saved %s\n', base);
+end
+function p1d(imgSel)
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 1(d): Evaluation of Edge Detectors against Human GT
+if nargin < 1, imgSel = "ALL"; end
+imgSel = string(imgSel);
+
+clc;
+
+%Set input folder
+edge_inp = "edges";
+gt_inp   = "gt";
+
+%Set output folder
+outp = "eval_out_p1d_manual";
+if ~exist(outp,'dir')
+    mkdir(outp);
+end
+
+%Command to set plot output folder
+plotp = fullfile(outp, "plots");
+if ~exist(plotp,'dir')
+    mkdir(plotp);
+end
+
+%Command to set SE thresholds
+se_thrs = [0.15 0.25 0.35];
+
+fprintf("HW2 P1(d):\n");
+
+%Command to run Bird evals
+if imgSel == "ALL" || imgSel == "Bird"
+    cfg.gt_mat = fullfile(gt_inp, "Bird_GT.mat");
+    eval_img("Bird", cfg, edge_inp, se_thrs, outp, plotp);
+end
+
+%Command to run Deer evals
+if imgSel == "ALL" || imgSel == "Deer"
+    cfg.gt_mat = fullfile(gt_inp, "Deer_GT.mat");
+    eval_img("Deer", cfg, edge_inp, se_thrs, outp, plotp);
+end
+
+fprintf("\nDone. Output File: %s\n", outp);
+end
+
+function eval_img(imgName, cfg, edge_inp, se_thrs, outp, plotp)
+
+%Command to split GT
+gt_outp = fullfile(outp, "tmp_gt");
+gtFiles = make_gt_splits_once(cfg.gt_mat, gt_outp, imgName);
+nGT = numel(gtFiles);
+
+%Command to get Sobel maps
+[sobel_files, sobelT] = pick_sobel(edge_inp, imgName);
+
+%Command to get Canny maps
+[canny_files, cannyT] = pick_canny(edge_inp, imgName);
+
+%Command to grt SE map
+seProb = fullfile(edge_inp, imgName + "_SE_prob.png");
+if ~exist(seProb,'file')
+    error("[%s] Missing SE prob map: %s", imgName, seProb);
+end
+
+%Part 1 CSV outputs + Part 2 CVS
+sobel = fullfile(outp, sprintf("%s_Sobel_perGT.csv", imgName));
+canny = fullfile(outp, sprintf("%s_Canny_perGT.csv", imgName));
+struct = fullfile(outp, sprintf("%s_SE_perGT.csv", imgName));
+summary = fullfile(outp, sprintf("%s_summary.csv", imgName));
+sobelThrs = fullfile(outp, sprintf("%s_Sobel_thresholdTable.csv", imgName));
+cannyThrs = fullfile(outp, sprintf("%s_Canny_thresholdTable.csv", imgName));
+structThrs = fullfile(outp, sprintf("%s_SE_thresholdTable.csv", imgName));
+
+%Command to run Sobel
+[PRgt_s, thr_s] = eval_binary_set(imgName, "Sobel", sobel_files, gtFiles, "T", sobelT);
+write_perGT(sobel, PRgt_s);
+write_thres(sobelThrs, thr_s);
+
+%Command to calc Sobel metrics
+Ps = mean(PRgt_s(:,1));
+Rs = mean(PRgt_s(:,2));
+Fs = f_measure(Ps, Rs);
+
+%Command to run Canny 
+[PRgt_c, thr_c] = eval_binary_set(imgName, "Canny", canny_files, gtFiles, "pair", cannyT);
+write_perGT(canny, PRgt_c);
+write_thres(cannyThrs, thr_c);
+
+%Command to calc Canny metrics
+Pc = mean(PRgt_c(:,1));
+Rc = mean(PRgt_c(:,2));
+Fc = f_measure(Pc, Rc);
+
+%Command to run SE
+[PRgt_e, thr_e] = eval_probmap(imgName, "SE", seProb, se_thrs, gtFiles);
+write_perGT(struct, PRgt_e);
+write_thres(structThrs, thr_e);
+
+%Command to calc SE metrics
+Pe = mean(PRgt_e(:,1));
+Re = mean(PRgt_e(:,2));
+Fe = f_measure(Pe, Re);
+
+%Write summary 
+sumTbl = strings(3,4);
+sumTbl(1,:) = ["Sobel", fmt(Ps), fmt(Rs), fmt(Fs)];
+sumTbl(2,:) = ["Canny", fmt(Pc), fmt(Rc), fmt(Fc)];
+sumTbl(3,:) = ["SE",    fmt(Pe), fmt(Re), fmt(Fe)];
+write_sum(summary, sumTbl);
+end
+
+function [PR_gt, thr] = eval_binary_set(imgName, app, files, gtFiles, thrKind, thrLab)
+K = numel(files);
+nGT = numel(gtFiles);
+
+P_all = zeros(K, nGT);
+R_all = zeros(K, nGT);
+
+%Command to loop over thresholds
+for k = 1:K
+    fprintf("[%s - %s] Thres Value %d / %d\n", imgName, app, k, K);
+    Eb = read_raw_as_binary_uint8(files(k), 481, 321);
+
+    %Command to loop over GT maps
+    for i = 1:nGT
+        fprintf("GT %d / %d\n", i, nGT);
+        [P, R] = evalPR_exact(Eb, gtFiles(i));
+        P_all(k,i) = P;
+        R_all(k,i) = R;
+    end
+end
+
+%Command to calc GT mean across thresholds
+PR_gt = zeros(nGT,2);
+for i = 1:nGT
+    PR_gt(i,1) = mean(P_all(:,i));
+    PR_gt(i,2) = mean(R_all(:,i));
+end
+
+%Command to group threshold data
+thr.app = app;
+thr.K = K;
+thr.nGT = nGT;
+thr.P_all = P_all;
+thr.R_all = R_all;
+
+%Command to build threshold labels
+thr.thrLabel = strings(K,1);
+for k = 1:K
+    if thrKind == "T"
+        thr.thrLabel(k) = "T" + string(thrLab(k));
+    else
+        thr.thrLabel(k) = string(thrLab(k));
+    end
+end
+
+%Compute mean P R and F for each threshold
+thr.meanP = mean(P_all, 2);
+thr.meanR = mean(R_all, 2);
+thr.F = arrayfun(@(a,b) f_measure(a,b), thr.meanP, thr.meanR);
+end
+
+function [PR_gt, thr] = eval_probmap(imgName, app, prob_file, thrs, gtFiles)
+Eprob = read_png(prob_file);
+
+K = numel(thrs);
+nGT = numel(gtFiles);
+P_all = zeros(K, nGT);
+R_all = zeros(K, nGT);
+
+%Command to loop over thresholds
+for k = 1:K
+    Eb = uint8(Eprob >= thrs(k));
+    for i = 1:nGT
+        [P, R] = evalPR_exact(Eb, gtFiles(i));
+        P_all(k,i) = P;
+        R_all(k,i) = R;
+    end
+end
+
+%Command to compute per-GT mean across thresholds
+PR_gt = zeros(nGT,2);
+for i = 1:nGT
+    PR_gt(i,1) = mean(P_all(:,i));
+    PR_gt(i,2) = mean(R_all(:,i));
+end
+
+%Command to group threshold data
+thr.app = app;
+thr.K = K;
+thr.nGT = nGT;
+thr.P_all = P_all;
+thr.R_all = R_all;
+
+%Command to build threshold labels
+thr.thrLabel = strings(K,1);
+for k = 1:K
+    thr.thrLabel(k) = sprintf("thr=%.2f", thrs(k));
+end
+
+%Compute mean P R and F for each threshold
+thr.meanP = mean(P_all, 2);
+thr.meanR = mean(R_all, 2);
+thr.F = arrayfun(@(a,b) f_measure(a,b), thr.meanP, thr.meanR);
+end
+
+function [P, R] = evalPR_exact(Eb_uint8, gtFile)
+
+Eb = (Eb_uint8 > 0);
+S = load(char(gtFile));
+gt1 = S.groundTruth{1};
+
+%Command to get boundary map
+if isfield(gt1, 'Boundaries')
+    G = (gt1.Boundaries > 0);
+else
+    error("GT missing'Bounds' in %s", gtFile);
+end
+
+%Calc TP FP FN
+TP = sum(Eb(:) & G(:));
+FP = sum(Eb(:) & ~G(:));
+FN = sum(~Eb(:) & G(:));
+
+%Calc precision
+if (TP + FP) == 0
+    P = 0;
+else
+    P = TP / (TP + FP);
+end
+
+%Calc recall
+if (TP + FN) == 0
+    R = 0;
+else
+    R = TP / (TP + FN);
+end
+end
+
+function [files, sobelT] = pick_sobel(folder, imgName)
+
+%Command to list Sobel files
+d = dir(fullfile(folder, imgName + "_edge_T*.raw"));
+if isempty(d)
+    error("[%s] No Sobel files found: %s", imgName, fullfile(folder, imgName + "_edge_T*.raw"));
+end
+
+%Command to sort files
+names = sort(string({d.name}));
+files = fullfile(folder, names);
+
+%Command to parse threshold values
+Tvals = zeros(numel(names),1);
+for i = 1:numel(names)
+    tok = regexp(names(i), "_T(\d+)\.raw$", "tokens", "once");
+    if isempty(tok)
+        Tvals(i) = i;
+    else
+        Tvals(i) = str2double(tok{1});
+    end
+end
+sobelT = Tvals;
+end
+
+function [files, cannyT] = pick_canny(folder, imgName)
+
+%Command to list Canny files
+d = dir(fullfile(folder, imgName + "_canny_L*_H*.raw"));
+
+%Command to sort files
+names = sort(string({d.name}));
+files = fullfile(folder, names);
+
+%Command to parse low/high labels
+cannyT = strings(numel(names),1);
+for i = 1:numel(names)
+    tok = regexp(names(i), "_L(\d+)_H(\d+)\.raw$", "tokens", "once");
+    if isempty(tok)
+        cannyT(i) = "pair" + string(i);
+    else
+        cannyT(i) = "L" + tok{1} + "_H" + tok{2};
+    end
+end
+end
+
+function gtFiles = make_gt_splits_once(gt_mat_path, tmp_dir, prefix)
+
+if ~exist(tmp_dir, 'dir')
+    mkdir(tmp_dir);
+end
+
+%Command to load GT mat
+S = load(gt_mat_path);
+if ~isfield(S,'groundTruth')
+    error("GT mat missing 'groundTruth': %s", gt_mat_path);
+end
+
+%Command to split GT cell array
+GTcell = S.groundTruth;
+nGT = numel(GTcell);
+gtFiles = strings(nGT,1);
+
+for i = 1:nGT
+    gtFiles(i) = fullfile(tmp_dir, sprintf("%s_GT%d.mat", prefix, i));
+    if ~exist(gtFiles(i), 'file')
+        groundTruth = {GTcell{i}}; 
+        save(char(gtFiles(i)), 'groundTruth');
+    end
+end
+end
+
+function E = read_png(path)
+
+%Command to read prob PNG 
+I = imread(path);
+if ndims(I) == 3
+    I = rgb2gray(I);
+end
+E = double(I);
+if max(E(:)) > 1
+    E = E / 255.0;
+end
+E = max(0, min(1, E));
+end
+
+function Eb = read_raw_as_binary_uint8(path, width, height)
+
+%Command to read RAW file
+filesDir = fopen(path,'rb');
+if filesDir < 0
+    error("Cannot open inoput file %s", path);
+end
+
+I = fread(filesDir, width*height, 'uint8=>uint8');
+fclose(filesDir);
+
+I = reshape(I, [width height])';
+
+%Convert RAW 
+Eb = uint8(I < 128);
+end
+
+function write_perGT(csv_path, PR_gt)
+
+%Command to write Per-GT CSV file
+filesDir = fopen(csv_path, 'w');
+fprintf(filesDir, "GT,MeanPrecision,MeanRecall\n");
+for i = 1:size(PR_gt,1)
+    fprintf(filesDir, "GT%d,%.6f,%.6f\n", i, PR_gt(i,1), PR_gt(i,2));
+end
+fclose(filesDir);
+end
+
+function write_sum(csv_path, summary)
+
+%Write summary file
+filesDir = fopen(csv_path, 'w');
+fprintf(filesDir, "Method,MeanPrecision,MeanRecall,Fmeasure\n");
+for i = 1:size(summary,1)
+    fprintf(filesDir, "%s,%s,%s,%s\n", summary(i,1), summary(i,2), summary(i,3), summary(i,4));
+end
+fclose(filesDir);
+end
+
+function write_thres(csv_path, thr)
+
+%Write threshold table
+K = thr.K;
+nGT = thr.nGT;
+
+filesDir = fopen(csv_path, 'w');
+fprintf(filesDir, "Threshold,MeanP,MeanR,F");
+for i = 1:nGT
+    fprintf(filesDir, ",GT%d_P,GT%d_R", i, i);
+end
+fprintf(filesDir, "\n");
+
+for k = 1:K
+    fprintf(filesDir, "%s,%.6f,%.6f,%.6f", thr.thrLabel(k), thr.meanP(k), thr.meanR(k), thr.F(k));
+    for i = 1:nGT
+        fprintf(filesDir, ",%.6f,%.6f", thr.P_all(k,i), thr.R_all(k,i));
+    end
+    fprintf(filesDir, "\n");
+end
+
+fclose(filesDir);
+end
+
+function F = f_measure(P,R)
+
+%Command to compute F-measure
+if (P + R) == 0
+    F = 0;
+else
+    num = 2 * P * R;
+    denom = P + R;
+    F = num/ denom;
+end
+end
+
+function s = fmt(x)
+
+%Command to format numeric values
+s = string(sprintf("%.6f", x));
+end
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 2(a): Thresholding and Dithering for Grayscale
+
+clear; clc; close all;
+inp = "Reflection.raw";
+outp = "outputs/";
+width = 1280;
+height = 852;
+
+if ~exist(outp, 'dir')
+    mkdir(outp);
+end
+
+F = readraw(inp, width, height);
+
+% Command to run Fixed Threshold
+fixedT = 128;
+fix_G  = uint8(255) * uint8(F >= fixedT);
+writeraw(outp + "p2a_fixed.raw", fix_G);
+
+% Command to run Random Threshold
+randomT = 0;   
+rng(randomT);
+R = randi([0 255], size(F));
+rand_G = uint8(255) * uint8(F >= R);
+writeraw(outp + "p2a_random.raw", rand_G);
+
+%Command to run Dither
+nVal = [2 8 32];
+for k = 1:length(nVal)
+
+    N = nVal(k);
+    I = buildBayer(N);
+    T = buildThreshold(I);
+    dit_G = dither(F, T);
+
+    writeraw(outp + sprintf("p2a_I%d.raw", N), dit_G);
+    imwrite(uint8(T), outp + sprintf("T%d.png", N));
+
+end
+
+%Read raw image function
+function F = readraw(path, width, height)
+    fid = fopen(path, 'rb');
+    assert(fid ~= -1, "Error: Cannot open input file.");
+    F = fread(fid, width*height, 'uint8=>uint8');
+    fclose(fid);
+    F = reshape(F, [width, height])';
+end
+
+%Write raw image function
+function writeraw(path, img)
+    fid = fopen(path, 'wb');
+    assert(fid ~= -1, "Error: Cannot write to output file.");
+    fwrite(fid, img', 'uint8');
+    fclose(fid);
+
+end
+
+%Build bayer matrix function
+function I = buildBayer(N)
+    I = uint16([1 2;
+                3 0]);   
+    curVal = 2;
+    while curVal < N
+        I = [4*I + 1, 4*I + 2;
+             4*I + 3, 4*I];
+        curVal = curVal * 2;
+    end
+end
+
+% Build Threshold Matrix Functiomn
+function T = buildThreshold(I)
+    N = size(I,1);
+    T = (double(I) + 0.5) / (N*N) * 255;
+end
+
+%Dithering Function
+function G = dither(F, T)
+    [height, width] = size(F);
+    N = size(T,1);
+    threshMap = zeros(height, width);
+    for r = 1:height
+        for c = 1:width
+            row = mod(r-1, N) + 1;
+            col = mod(c-1, N) + 1;
+            threshMap(r,c) = T(row, col);
+        end
+    end
+    G = uint8(255) * uint8(double(F) > threshMap);
+end
+
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 2(b): Error Diffusion Dithering for Grayscale
+clear; clc; close all;
+
+inp = "Reflection.raw";
+outp = "p2b_outputs/";
+width = 1280;
+height = 852;
+
+if ~exist(outp, 'dir')
+    mkdir(outp);
+end
+input = readraw(inp, width, height);
+
+%Steinberg Matrix + Run
+stein = [0 0 0;
+        0 0 7;
+        3 5 1];
+denomStein = 16;
+steinOut = errDiff(input, stein, denomStein);
+writeraw(outp + "p2b_FS.raw", steinOut);
+
+%JJN Matrix + Run
+jjn = [0 0 0 0 0;
+         0 0 0 0 0;
+         0 0 0 7 5;
+         3 5 7 5 3;
+         1 3 5 3 1];
+denomJJN = 48;
+jjnOut = errDiff(input, jjn, denomJJN);
+writeraw(outp + "p2b_JJN.raw", jjnOut);
+
+%Stucki Matrix + Run
+stu = [0 0 0 0 0;
+         0 0 0 0 0;
+         0 0 0 8 4;
+         2 4 8 4 2;
+         1 2 4 2 1];
+denomStu = 42;
+stuOut = errDiff(input, stu, denomStu);
+writeraw(outp + "p2b_Stucki.raw", stuOut);
+
+%Read raw image function
+function F = readraw(path, width, height)
+    fid = fopen(path, 'rb');
+    assert(fid ~= -1, "Error: Cannot open input file.");
+    F = fread(fid, width*height, 'uint8=>double');
+    fclose(fid);
+    F = reshape(F, [width, height])';
+end
+
+%Write raw image function
+function writeraw(path, img)
+    fid = fopen(path, 'wb');
+    assert(fid ~= -1, "Error: Cannot write to output file.");
+    fwrite(fid, img', 'uint8');
+    fclose(fid);
+end
+
+%Function tfor Error Diffusion
+function G = errDiff(input, diffMat, den)
+    input = double(input);
+    [height, width] = size(input);
+    G = zeros(height, width);
+    halfK = floor(size(diffMat,1)/2);
+    diffMat = diffMat / den;
+    thresh = 128;
+
+    for row = 1:height
+        if mod(row,2) == 1
+            colWidth = 1:width;
+            dir = 1;
+        else
+            colWidth = width:-1:1;
+            dir = -1;
+        end
+
+        for col = colWidth
+            oldVal = input(row,col);
+
+            if oldVal >= thresh
+                newVal = 255;
+            else
+                newVal = 0;
+            end
+            G(row,col) = newVal;
+            diff = oldVal - newVal;
+            for kRow = 1:size(diffMat,1)
+                for kCol = 1:size(diffMat,2)
+                    wVal = diffMat(kRow,kCol);
+                    if wVal == 0
+                        continue;
+                    end
+                    nRow = row + (kRow - halfK - 1);
+                    if dir == 1
+                        nCol = col + (kCol - halfK - 1);
+                    else
+                        nCol = col - (kCol - halfK - 1);
+                    end
+                    if nRow >= 1 && nRow <= height && nCol >= 1 && nCol <= width
+                        input(nRow,nCol) = input(nRow,nCol) + diff * wVal;
+                        input(nRow,nCol) = min(255, max(0, input(nRow,nCol)));
+                    end
+                end
+            end
+
+        end
+    end
+    G = uint8(G);
+end
+
+
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 3(a): Separable Error Diffusion Dithering for CMY
+
+clear; clc; close all;
+
+inp = "Flowers.raw";
+width = 1280;
+height = 853;
+outp = "p3a_outputs/";
+
+if ~exist(outp, 'dir')
+    mkdir(outp);
+end
+
+inputRGB = readraw(inp, width, height, 3);
+
+R = double(inputRGB(:,:,1));
+G = double(inputRGB(:,:,2));
+B = double(inputRGB(:,:,3));
+
+C = 255 - R;
+M = 255 - G;
+Y = 255 - B;
+
+stein = [0 0 0;
+         0 0 7;
+         3 5 1];
+denomStein = 16;
+
+Cb = errDiff(C, stein, denomStein);
+Mb = errDiff(M, stein, denomStein);
+Yb = errDiff(Y, stein, denomStein);
+outR = uint8(255 - double(Cb));
+outG = uint8(255 - double(Mb));
+outB = uint8(255 - double(Yb));
+
+outRGB = cat(3, outR, outG, outB);
+
+writeraw(outp + "p3a_separable_CMY_FS.raw", outRGB);
+
+function F = readraw(path, width, height, channels)
+    fid = fopen(path, 'rb');
+    assert(fid ~= -1, "Error: Cannot open input file.");
+
+    F = fread(fid, width*height*channels, 'uint8=>double');
+    fclose(fid);
+
+    if channels == 1
+        F = reshape(F, [width, height])';
+    else
+        
+        F = reshape(F, [channels, width, height]);
+        F = permute(F, [3 2 1]); % -> [height, width, channels]
+    end
+
+    F = uint8(F);
+end
+
+function writeraw(path, img)
+    fid = fopen(path, 'wb');
+    assert(fid ~= -1, "Error: Cannot write to output file.");
+
+    if ndims(img) == 2
+        fwrite(fid, img', 'uint8');
+    else
+        img = permute(img, [3 2 1]);         
+        fwrite(fid, img(:), 'uint8');
+    end
+
+    fclose(fid);
+end
+
+function G = errDiff(input, diffMat, den)
+    input = double(input);
+    [height, width] = size(input);
+    G = zeros(height, width);
+    halfK = floor(size(diffMat,1)/2);
+    diffMat = diffMat / den;
+    thresh = 128;
+    for row = 1:height
+        if mod(row,2) == 1
+            colWidth = 1:width;
+            dir = 1;
+        else
+            colWidth = width:-1:1;
+            dir = -1;
+        end
+        for col = colWidth
+            oldVal = input(row,col);
+
+            if oldVal >= thresh
+                newVal = 255;
+            else
+                newVal = 0;
+            end
+            G(row,col) = newVal;
+            diff = oldVal - newVal;
+            for kRow = 1:size(diffMat,1)
+                for kCol = 1:size(diffMat,2)
+                    wVal = diffMat(kRow,kCol);
+                    if wVal == 0
+                        continue;
+                    end
+
+                    nRow = row + (kRow - halfK - 1);
+
+                    if dir == 1
+                        nCol = col + (kCol - halfK - 1);
+                    else
+                        nCol = col - (kCol - halfK - 1);
+                    end
+
+                    if nRow >= 1 && nRow <= height && nCol >= 1 && nCol <= width
+                        input(nRow,nCol) = input(nRow,nCol) + diff * wVal;
+                        input(nRow,nCol) = min(255, max(0, input(nRow,nCol)));
+                    end
+                end
+            end
+        end
+    end
+    G = uint8(G);
+end
+
+
+% EE569 Homework #2
+% Name: Agam Sidhu
+% USC ID: 3027948957
+% USC Email: agamsidh@usc.edu
+% Submission Date: February 22, 2026
+% Problem 3(b): MBVQ Error Diffusion Dithering for RGB
+clear; clc; close all;
+
+inp = "Flowers.raw";
+outp = "p3b_outputs/";
+width = 1280;
+height = 853;
+
+if ~exist(outp, 'dir')
+    mkdir(outp);
+end
+
+inputRGB = readraw(inp, width, height, 3);
+
+stein = [0 0 0;
+         0 0 7;
+         3 5 1];
+denomStein = 16;
+
+mbvqOut = errDiff_MBVQ(inputRGB, stein, denomStein);
+writeraw(outp + "p3b_MBVQ_FS.raw", mbvqOut);
+
+function F = readraw(path, width, height, channels)
+    fid = fopen(path, 'rb');
+    assert(fid ~= -1, "Error: Cannot open input file.");
+    F = fread(fid, width*height*channels, 'uint8=>double');
+    fclose(fid);
+
+    if channels == 1
+        F = reshape(F, [width, height])';
+    else
+        F = reshape(F, [channels, width, height]);
+        F = permute(F, [3 2 1]);  % (H,W,C)
+    end
+
+    F = uint8(F);
+end
+
+function writeraw(path, img)
+    fid = fopen(path, 'wb');
+    assert(fid ~= -1, "Error: Cannot write to output file.");
+
+    if ndims(img) == 2
+        fwrite(fid, img', 'uint8');
+    else
+        img = permute(img, [3 2 1]); % (C,W,H)
+        fwrite(fid, img(:), 'uint8');
+    end
+    fclose(fid);
+end
+
+function outRGB = errDiff_MBVQ(inputRGB, diffMat, den)
+    inputRGB = double(inputRGB);
+    [H, W, ~] = size(inputRGB);
+
+    bufR = inputRGB(:,:,1);
+    bufG = inputRGB(:,:,2);
+    bufB = inputRGB(:,:,3);
+    outRGB = zeros(H, W, 3);
+
+    halfK = floor(size(diffMat,1)/2);
+    diffMat = diffMat / den;
+
+    for row = 1:H
+        if mod(row,2) == 1
+            colRange = 1:W;
+            dir = 1;      
+        else
+            colRange = W:-1:1;
+            dir = -1;    
+        end
+
+        for col = colRange
+            r0 = inputRGB(row,col,1);
+            g0 = inputRGB(row,col,2);
+            b0 = inputRGB(row,col,3);
+            mbvq = getMBVQ(r0, g0, b0);  
+
+            Rc = min(255, max(0, bufR(row,col)));
+            Gc = min(255, max(0, bufG(row,col)));
+            Bc = min(255, max(0, bufB(row,col)));
+
+            vName = getNearestVertex(mbvq, Rc/255, Gc/255, Bc/255); 
+            V = vertexToRGB(vName);  
+
+            outRGB(row,col,1) = V(1);
+            outRGB(row,col,2) = V(2);
+            outRGB(row,col,3) = V(3);
+
+            errR = Rc - V(1);
+            errG = Gc - V(2);
+            errB = Bc - V(3);
+            for kRow = 1:size(diffMat,1)
+                for kCol = 1:size(diffMat,2)
+                    w = diffMat(kRow,kCol);
+                    if w == 0, continue; end
+
+                    nRow = row + (kRow - halfK - 1);
+                    if dir == 1
+                        nCol = col + (kCol - halfK - 1);
+                    else
+                        nCol = col - (kCol - halfK - 1);
+                    end
+
+                    if nRow >= 1 && nRow <= H && nCol >= 1 && nCol <= W
+                        bufR(nRow,nCol) = min(255, max(0, bufR(nRow,nCol) + errR*w));
+                        bufG(nRow,nCol) = min(255, max(0, bufG(nRow,nCol) + errG*w));
+                        bufB(nRow,nCol) = min(255, max(0, bufB(nRow,nCol) + errB*w));
+                    end
+                end
+            end
+
+        end
+    end
+    outRGB = uint8(outRGB);
+end
+
+function mbvq = getMBVQ(r, g, b)
+    if (r + g) > 255
+        if (g + b) > 255
+            if (r + g + b) > 510
+                mbvq = "CMYW";
+            else
+                mbvq = "MYGC";
+            end
+        else
+            mbvq = "RGMY";
+        end
+    else
+        if (g + b) <= 255
+            if (r + g + b) <= 255
+                mbvq = "KRGB";
+            else
+                mbvq = "RGBM";
+            end
+        else
+            mbvq = "CMGB";
+        end
+    end
+end
+
+function V = vertexToRGB(vName) 
+    switch char(vName)
+        case 'black',   V = [0 0 0];
+        case 'white',   V = [255 255 255];
+        case 'red',     V = [255 0 0];
+        case 'green',   V = [0 255 0];
+        case 'blue',    V = [0 0 255];
+        case 'cyan',    V = [0 255 255];
+        case 'magenta', V = [255 0 255];
+        case 'yellow',  V = [255 255 0];
+        otherwise,      V = [0 0 0]; % fallback
+    end
+end
