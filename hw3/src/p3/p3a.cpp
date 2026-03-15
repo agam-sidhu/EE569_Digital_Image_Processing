@@ -62,147 +62,164 @@ static void writeraw(const string& filename, const vector<uint8_t>& buffer)
     file.close();
 }
 
-//Binarize image using threshold 0.5 * Fmax
-static vector<uint8_t> binarizeImage(const vector<uint8_t>& gray, int width, int height)
-{
-    uint8_t fmax = 0;
-    for (size_t i = 0; i < gray.size(); i++) {
-        fmax = max(fmax, gray[i]);
+//Function to convert into raw from binary
+static vector<uint8_t> toRaw(const vector<uint8_t>& bi) {
+    size_t n = bi.size();
+    vector<uint8_t> output(n, 0);
+    for (size_t i = 0; i < n; i++) {
+        if (bi[i] == 1) {
+        output[i] = 255; 
+        } else {
+            output[i] = 0;  
+        }
     }
+    return output;
+}
 
-    const double thresh = 0.5 * static_cast<double>(fmax);
-    vector<uint8_t> binary(width * height, 0);
+//Function to binarize image
+static vector<uint8_t> toBinary(const vector<uint8_t>& image, int width, int height)
+{
+    //gets the max pixel valye
+    uint8_t fMax = 0;
+    for (size_t i = 0; i < image.size(); i++) {
+        fMax = max(fMax, image[i]);
+    }
+    //hreshold value (1/2 the max)
+    const double tVal = 0.5 * static_cast<double>(fMax);
+    vector<uint8_t> biOut(width * height, 0);
 
+    //check to see if greater than threshold
     for (int i = 0; i < width * height; i++) {
-        binary[i] = (gray[i] > thresh) ? 1 : 0;
+         // 1 if above else 0 
+         bool above = image[i] > tVal; 
+        if (above) {
+            biOut[i] = 1; 
+        } else {
+            biOut[i] = 0;
+        }
     }
-    return binary;
+    return biOut;
 }
 
-//Convert binary {0,1} to raw {0,255}
-static vector<uint8_t> binaryToRaw(const vector<uint8_t>& binary) {
-    vector<uint8_t> out(binary.size(), 0);
-    for (size_t i = 0; i < binary.size(); i++) {
-        out[i] = binary[i] ? 255 : 0;
-    }
-    return out;
-}
-
-//Get binary pixel
-static inline uint8_t getBin(const vector<uint8_t>& img, int width, int height, int row, int col)
+//Function to get binary pixel 
+static inline uint8_t getBP(const vector<uint8_t>& image, int width, int height, int row, int col)
 {
+    //sees if out of bounds
     if (row < 0 || row >= height || col < 0 || col >= width) {
         return 0;
     }
-    return img[row * width + col];
+    uint8_t pix = image[row * width + col];
+    return pix;
 }
 
-//Number of nonzero neighbors in 8-neighborhood
-static int countNeighbors(const vector<uint8_t>& img, int width, int height, int row, int col)
+//Function to count nonzero neightbors (8-neighborhood)
+static int neighborCount(const vector<uint8_t>& image, int width, int height, int row, int col)
 {
-    int p2 = getBin(img, width, height, row - 1, col);
-    int p3 = getBin(img, width, height, row - 1, col + 1);
-    int p4 = getBin(img, width, height, row, col + 1);
-    int p5 = getBin(img, width, height, row + 1, col + 1);
-    int p6 = getBin(img, width, height, row + 1, col);
-    int p7 = getBin(img, width, height, row + 1, col - 1);
-    int p8 = getBin(img, width, height, row, col - 1);
-    int p9 = getBin(img, width, height, row - 1, col - 1);
-
-    return p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+    //all 8 neighbors in order (p2 to p9)
+    int p2 = getBP(image, width, height, row - 1, col);
+    int p3 = getBP(image, width, height, row - 1, col + 1);
+    int p4 = getBP(image, width, height, row, col + 1);
+    int p5 = getBP(image, width, height, row + 1, col + 1);
+    int p6 = getBP(image, width, height, row + 1, col);
+    int p7 = getBP(image, width, height, row + 1, col - 1);
+    int p8 = getBP(image, width, height, row, col - 1);
+    int p9 = getBP(image, width, height, row - 1, col - 1);
+    //sum of total neighbors (nonzero)
+    int sum = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+    return sum;
 }
 
-//Number of 0->1 transitions in ordered neighborhood
-static int countTransitions(const vector<uint8_t>& img,
-                            int width,
-                            int height,
-                            int row,
-                            int col)
+//Function to count transitions from 0/1 
+static int countTrans(const vector<uint8_t>& image, int width, int height, int row, int col)
 {
-    int p2 = getBin(img, width, height, row - 1, col);
-    int p3 = getBin(img, width, height, row - 1, col + 1);
-    int p4 = getBin(img, width, height, row,     col + 1);
-    int p5 = getBin(img, width, height, row + 1, col + 1);
-    int p6 = getBin(img, width, height, row + 1, col);
-    int p7 = getBin(img, width, height, row + 1, col - 1);
-    int p8 = getBin(img, width, height, row,     col - 1);
-    int p9 = getBin(img, width, height, row - 1, col - 1);
+    //get neightbors in order (p2 to p9)
+    int p2 = getBP(image, width, height, row - 1, col);
+    int p3 = getBP(image, width, height, row - 1, col + 1);
+    int p4 = getBP(image, width, height, row, col + 1);
+    int p5 = getBP(image, width, height, row + 1, col + 1);
+    int p6 = getBP(image, width, height, row + 1, col);
+    int p7 = getBP(image, width, height, row + 1, col - 1);
+    int p8 = getBP(image, width, height, row, col - 1);
+    int p9 = getBP(image, width, height, row - 1, col - 1);
 
+    //add p2 to end to complete cycle
     int seq[9] = {p2, p3, p4, p5, p6, p7, p8, p9, p2};
-    int A = 0;
+    int count = 0;
+    //count transitions (from 0 ->1)
     for (int i = 0; i < 8; i++) {
         if (seq[i] == 0 && seq[i + 1] == 1) {
-            A++;
+            count++;
         }
     }
-    return A;
+    return count;
 }
 
-//One full Zhang-Suen thinning iteration
-static bool thinningIteration(vector<uint8_t>& img,
-                              int width,
-                              int height)
+//Function to run one iteration of the thinning slgo
+static bool thinIter(vector<uint8_t>& image, int width, int height)
 {
-    bool changed = false;
-    vector<int> toDelete;
+    bool altered = false;
+    vector<int> del;
 
-    //Subiteration 1
-    toDelete.clear();
+    //iteration 1
+    del.clear();
     for (int row = 1; row < height - 1; row++) {
         for (int col = 1; col < width - 1; col++) {
-            if (img[row * width + col] == 0) continue;
-
-            int p2 = getBin(img, width, height, row - 1, col);
-            int p4 = getBin(img, width, height, row,     col + 1);
-            int p6 = getBin(img, width, height, row + 1, col);
-            int p8 = getBin(img, width, height, row,     col - 1);
-
-            int B = countNeighbors(img, width, height, row, col);
-            int A = countTransitions(img, width, height, row, col);
-
-            if (A == 1 &&
-                B >= 2 && B <= 6 &&
-                (p2 * p4 * p6) == 0 &&
-                (p4 * p6 * p8) == 0) {
-                toDelete.push_back(row * width + col);
+            if (image[row * width + col] == 0) continue;
+            //get neighbors
+            int p2 = getBP(image, width, height, row - 1, col);
+            int p4 = getBP(image, width, height, row, col + 1);
+            int p6 = getBP(image, width, height, row + 1, col);
+            int p8 = getBP(image, width, height, row, col - 1);
+            //neighbor count & transition count
+            int neighNum = neighborCount(image, width, height, row, col);
+            int trans = countTrans(image, width, height, row, col);
+            //check conditions
+            bool isTrans = trans == 1;
+            bool isNeigh = neighNum >= 2 && neighNum <= 6;
+            bool isZeroProd1 = (p2 * p4 * p6) == 0;
+            bool isZeroProd2 = (p4 * p6 * p8) == 0;
+            if (isTrans && isNeigh && isZeroProd1 && isZeroProd2) {
+                del.push_back(row * width + col); // highlight to delete
             }
         }
     }
 
-    for (size_t i = 0; i < toDelete.size(); i++) {
-        img[toDelete[i]] = 0;
-        changed = true;
+    for (size_t i = 0; i < del.size(); i++) {
+        image[del[i]] = 0; // delete the pixel
+        altered = true;
     }
 
-    //Subiteration 2
-    toDelete.clear();
+    //iteration 2
+    del.clear();
     for (int row = 1; row < height - 1; row++) {
         for (int col = 1; col < width - 1; col++) {
-            if (img[row * width + col] == 0) continue;
+            if (image[row * width + col] == 0) continue;
+            //get neighbors
+            int p2 = getBP(image, width, height, row - 1, col);
+            int p4 = getBP(image, width, height, row, col + 1);
+            int p6 = getBP(image, width, height, row + 1, col);
+            int p8 = getBP(image, width, height, row, col - 1);
 
-            int p2 = getBin(img, width, height, row - 1, col);
-            int p4 = getBin(img, width, height, row,     col + 1);
-            int p6 = getBin(img, width, height, row + 1, col);
-            int p8 = getBin(img, width, height, row,     col - 1);
-
-            int B = countNeighbors(img, width, height, row, col);
-            int A = countTransitions(img, width, height, row, col);
-
-            if (A == 1 &&
-                B >= 2 && B <= 6 &&
-                (p2 * p4 * p8) == 0 &&
-                (p2 * p6 * p8) == 0) {
-                toDelete.push_back(row * width + col);
+            //neighbor count & transition count
+            int neighNum = neighborCount(image, width, height, row, col);
+            int trans = countTrans(image, width, height, row, col);
+            //check conditions
+            bool isTrans = trans == 1;
+            bool isNeigh = neighNum >= 2 && neighNum <= 6;
+            bool isZeroProd1 = (p2 * p4 * p8) == 0;
+            bool isZeroProd2 = (p2 * p6 * p8) == 0; 
+            if (isTrans && isNeigh && isZeroProd1 && isZeroProd2) {
+                del.push_back(row * width + col);
             }
         }
     }
 
-    for (size_t i = 0; i < toDelete.size(); i++) {
-        img[toDelete[i]] = 0;
-        changed = true;
+    for (size_t i = 0; i < del.size(); i++) {
+        image[del[i]] = 0; // delete the pixel
+        altered = true;
     }
 
-    return changed;
+    return altered;
 }
 
 //Main function
@@ -214,43 +231,39 @@ int main(int argc, char* argv[]) {
              << " Jar.raw outputs/jar 512 512 30\n";
         return 1;
     }
-
-    const string inputPath = argv[1];
-    const string outputPrefix = argv[2];
+    //parse input args
+    const string input = argv[1];
+    const string output = argv[2];
     const int width = atoi(argv[3]);
     const int height = atoi(argv[4]);
-    const int maxIterations = atoi(argv[5]);
+    const int maxIter = atoi(argv[5]);
 
-    if (width <= 0 || height <= 0 || maxIterations <= 0) {
-        cerr << "Error: width, height, and maxIterations must be positive.\n";
-        return 1;
-    }
+    vector<uint8_t> image;
+    readraw(input, image, width, height, 1);
 
-    vector<uint8_t> gray;
-    readraw(inputPath, gray, width, height, 1);
+    //convert to binary & show result
+    vector<uint8_t> binary = toBinary(image, width, height);
+    writeraw(output + "_binary.raw", toRaw(binary));
 
-    vector<uint8_t> binary = binarizeImage(gray, width, height);
-    writeraw(outputPrefix + "_binary.raw", binaryToRaw(binary));
+    vector<int> checkPoint = {1, 10, 20};
+    //Runs algo until convergence/max iteration
+    for (int step = 1; step <= maxIter; step++) {
+        vector<uint8_t> prev = binary;
+        thinIter(binary, width, height);
 
-    vector<int> saveIters = {1, 5, 10, 15, 20};
-
-    for (int iter = 1; iter <= maxIterations; iter++) {
-        vector<uint8_t> prevBinary = binary;
-        thinningIteration(binary, width, height);
-
-        if (find(saveIters.begin(), saveIters.end(), iter) != saveIters.end()) {
-            writeraw(outputPrefix + "_thin_iter" + to_string(iter) + ".raw",
-                     binaryToRaw(binary));
+        //if checkpoint (output results)
+        if (find(checkPoint.begin(), checkPoint.end(), step) != checkPoint.end()) {
+            writeraw(output + "_thin_iter" + to_string(step) + ".raw",
+                    toRaw(binary));
         }
-
-        if (binary == prevBinary) {
-            cout << "Converged at iteration: " << iter << endl;
-            writeraw(outputPrefix + "_thin_final.raw", binaryToRaw(binary));
+        //convergence check
+        if (binary == prev) {
+            cout << "Reached convergence at: " << step << endl;
+            writeraw(output + "_thin_final.raw", toRaw(binary));
             return 0;
         }
     }
 
-    writeraw(outputPrefix + "_thin_final.raw", binaryToRaw(binary));
-    cout << "Reached max iterations without earlier convergence.\n";
+    writeraw(output + "_thin_final.raw", toRaw(binary));
     return 0;
 }
