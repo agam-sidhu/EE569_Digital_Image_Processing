@@ -235,15 +235,16 @@ int main(int argc, char* argv[]) {
     vector<int> saveIters = {1, 5, 10, 15, 20};
 
     for (int iter = 1; iter <= maxIterations; iter++) {
-        bool changed = thinningIteration(binary, width, height);
+        vector<uint8_t> prevBinary = binary;
+        thinningIteration(binary, width, height);
 
         if (find(saveIters.begin(), saveIters.end(), iter) != saveIters.end()) {
             writeraw(outputPrefix + "_thin_iter" + to_string(iter) + ".raw",
                      binaryToRaw(binary));
         }
 
-        if (!changed) {
-            cout << "Converged at iteration " << iter << endl;
+        if (binary == prevBinary) {
+            cout << "Converged at iteration: " << iter << endl;
             writeraw(outputPrefix + "_thin_final.raw", binaryToRaw(binary));
             return 0;
         }

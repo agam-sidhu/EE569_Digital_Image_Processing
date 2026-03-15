@@ -68,246 +68,244 @@ static void writeraw(const string& filename, const vector<uint8_t>& buffer)
     }
     file.close();
 }
-// Covert raw data RGB into the OPENCV BGR
-static Mat toBGR(const vector<uint8_t> &raw, int width, int height)
+// Function to convert raw data to BGR format
+static Mat toBGR(const vector<uint8_t> &image, int width, int height)
 {
     Mat transformed(height, width, CV_8UC3);
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
-            int idx = (row * width + col) * 3;
+            int val = row * width + col;
+            int i = val * 3;
             Vec3b& channel = transformed.at<Vec3b>(row, col);
-            channel[0] = raw[idx + 2]; //B val
-            channel[1] = raw[idx + 1]; // G val 
-            channel[2] = raw[idx + 0]; // R val 
+            channel[0] = image[i + 2]; //B val
+            channel[1] = image[i + 1]; // G val 
+            channel[2] = image[i + 0]; // R val 
         }
     }
     return transformed;
 }
 
-// Convert OpenCV BGR image back to raw RGB data
-static vector<uint8_t> toRaw(const Mat &img)
+// Convert image into raw RGB
+static vector<uint8_t> toRaw(const Mat &image)
 {
-    vector<uint8_t> raw(img.rows * img.cols * 3);
+    vector<uint8_t> output(image.rows * image.cols * 3);
+    for (int row = 0; row < image.rows; row++) {
+        for (int col = 0; col < image.cols; col++) {
+            int val = row * image.cols + col;
+            int i = val * 3;
+            const Vec3b& channel = image.at<Vec3b>(row, col);
 
-    for (int row = 0; row < img.rows; row++) {
-        for (int col = 0; col < img.cols; col++) {
-            int val = row * img.cols + col;
-            int idx = val * 3;
-            const Vec3b& channel = img.at<Vec3b>(row, col);
-
-            raw[idx + 0] = channel[2]; // R val
-            raw[idx + 1] = channel[1]; // G val
-            raw[idx + 2] = channel[0]; // B val
+            output[i + 0] = channel[2]; // R val
+            output[i + 1] = channel[1]; // G val
+            output[i + 2] = channel[0]; // B val
         }
     }
-
-    return raw;
+    return output;
 }
 
-// Get one color value with boundary clamping
-static inline uint8_t getPixelValue(const Mat& img, int row, int col, int ch)
+// FUnction that gets the pixel val from the image
+static inline uint8_t getPix(const Mat& input, int row, int col, int channel)
 {
-    row = clamp(row, 0, img.rows - 1);
-    col = clamp(col, 0, img.cols - 1);
-    ch  = clamp(ch, 0, 2);
-
-    return img.at<Vec3b>(row, col)[ch];
+    row = clamp(row, 0, input.rows - 1);
+    col = clamp(col, 0, input.cols - 1);
+    channel = clamp(channel, 0, 2);
+    return input.at<Vec3b>(row, col)[channel];
 }
 
 // Bilinear interpolation for one channel
-static double bilinearInterp(const Mat& img, double row, double col, int ch)
+static double biInter(const Mat& image, double r, double c, int ch)
 {
-    row = clampDouble(row, 0.0, static_cast<double>(img.rows - 1));
-    col = clampDouble(col, 0.0, static_cast<double>(img.cols - 1));
+    r = clampDouble(r, 0.0, static_cast<double>(image.rows - 1));
+    c = clampDouble(c, 0.0, static_cast<double>(image.cols - 1));
 
-    int r0 = static_cast<int>(floor(row));
-    int c0 = static_cast<int>(floor(col));
-    int r1 = clamp(r0 + 1, 0, img.rows - 1);
-    int c1 = clamp(c0 + 1, 0, img.cols - 1);
+    //Get coordintes
+    int rowLow = static_cast<int>(floor(r)); 
+    int colLow = static_cast<int>(floor(c));
+    int rowHigh = clamp(rowLow + 1, 0, image.rows - 1); 
+    int colHigh = clamp(colLow + 1, 0, image.cols - 1); 
 
-    double dr = row - r0;
-    double dc = col - c0;
+    double distRow = r - rowLow; 
+    double distCol = c - colLow; 
 
-    double v00 = static_cast<double>(getPixelValue(img, r0, c0, ch));
-    double v01 = static_cast<double>(getPixelValue(img, r0, c1, ch));
-    double v10 = static_cast<double>(getPixelValue(img, r1, c0, ch));
-    double v11 = static_cast<double>(getPixelValue(img, r1, c1, ch));
+    //Pixel values 
+    double tl = static_cast<double>(getPix(image, rowLow, colLow, ch)); 
+    double tr = static_cast<double>(getPix(image, rowLow, colHigh, ch)); 
+    double bl = static_cast<double>(getPix(image, rowHigh, colLow, ch)); 
+    double br = static_cast<double>(getPix(image, rowHigh, colHigh, ch));
 
-    double top = v00 * (1.0 - dc) + v01 * dc;
-    double bottom = v10 * (1.0 - dc) + v11 * dc;
-
-    return top * (1.0 - dr) + bottom * dr;
+    //neightbor weights
+    double weightL = 1.0 - distCol;  
+    double weightR = distCol;        
+    //blend top + bottom 
+    double top = tl * weightL + tr * weightR; 
+    double bot = bl * weightL + br * weightR;
+    double wTop = 1.0 - distRow;  
+    return top * wTop + bot * distRow; 
 }
 
-// 3x3 homography matrix
-struct HMatrix
-{
-    double h[3][3];
+struct HMat {
+    double mat[3][3];
 };
 
-// Multiply two homography matrices
-static HMatrix multiplyH(const HMatrix& H1, const HMatrix& H2)
+// Function to multiple 2 homography matrices
+static HMat matrixMult(const HMat& mat1, const HMat& mat2)
 {
-    HMatrix result{};
-
+    HMat result{};
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
-            result.h[i][j] = 0.0;
-            for (int k = 0; k < 3; k++) {
-                result.h[i][j] += H1.h[i][k] * H2.h[k][j];
+            double sum = 0.0;          
+            for (int x = 0; x < 3; x++) {
+                double mult = mat1.mat[i][x] * mat2.mat[x][j]; 
+                sum += mult;                             
             }
+            result.mat[i][j] = sum; 
         }
     }
-
     return result;
 }
 
-// Inverse of a 3x3 homography matrix
-static HMatrix inverseH(const HMatrix& H)
+// Function to invert the matrix
+static HMat invertMat(const HMat& homo)
 {
-    HMatrix inv{};
+    HMat out{};
+    //setting up matrix
+    double a = homo.mat[0][0]; 
+    double b = homo.mat[0][1]; 
+    double c = homo.mat[0][2];
+    double d = homo.mat[1][0]; 
+    double e = homo.mat[1][1]; 
+    double f = homo.mat[1][2];
+    double g = homo.mat[2][0];
+    double h = homo.mat[2][1];
+    double i = homo.mat[2][2];
 
-    double a = H.h[0][0], b = H.h[0][1], c = H.h[0][2];
-    double d = H.h[1][0], e = H.h[1][1], f = H.h[1][2];
-    double g = H.h[2][0], h = H.h[2][1], i = H.h[2][2];
-
-    double det = a * (e * i - f * h)
-               - b * (d * i - f * g)
-               + c * (d * h - e * g);
-
-    if (fabs(det) < 1e-12) {
-        cerr << "Error: homography matrix is singular." << endl;
-        exit(1);
-    }
-
-    inv.h[0][0] =  (e * i - f * h) / det;
-    inv.h[0][1] = -(b * i - c * h) / det;
-    inv.h[0][2] =  (b * f - c * e) / det;
-
-    inv.h[1][0] = -(d * i - f * g) / det;
-    inv.h[1][1] =  (a * i - c * g) / det;
-    inv.h[1][2] = -(a * f - c * d) / det;
-
-    inv.h[2][0] =  (d * h - e * g) / det;
-    inv.h[2][1] = -(a * h - b * g) / det;
-    inv.h[2][2] =  (a * e - b * d) / det;
-
-    return inv;
+    double upper = a * (e * i - f * h);
+    double mid = b * (d * i - f * g);
+    double low = c * (d * h - e * g);
+    double determinant = upper - mid + low;
+    //invert each row
+    //row1
+    out.mat[0][0] = (e * i - f * h) / determinant;
+    out.mat[0][1] = -(b * i - c * h) / determinant;
+    out.mat[0][2] = (b * f - c * e) / determinant;
+    //row2
+    out.mat[1][0] = -(d * i - f * g) / determinant;
+    out.mat[1][1] = (a * i - c * g) / determinant;
+    out.mat[1][2] = -(a * f - c * d) / determinant;
+    //row3
+    out.mat[2][0] = (d * h - e * g) / determinant;
+    out.mat[2][1]= -(a * h - b * g) / determinant;
+    out.mat[2][2] = (a * e - b * d) / determinant;
+    return out;
 }
 
-// Apply homography to one point
-static Point2d applyH(const HMatrix& H, const Point2d& pt)
+// Function to apply homography to a point 
+static Point2d applyHomo(const HMat& homo, const Point2d& p)
 {
-    double x = pt.x;
-    double y = pt.y;
+    ///get the point coordinates
+    double x = p.x;
+    double y = p.y;
 
-    double X = H.h[0][0] * x + H.h[0][1] * y + H.h[0][2];
-    double Y = H.h[1][0] * x + H.h[1][1] * y + H.h[1][2];
-    double W = H.h[2][0] * x + H.h[2][1] * y + H.h[2][2];
+    double num1 = homo.mat[0][0] * x + homo.mat[0][1] * y + homo.mat[0][2];
+    double num2 = homo.mat[1][0] * x + homo.mat[1][1] * y + homo.mat[1][2];
+    double denom = homo.mat[2][0] * x + homo.mat[2][1] * y + homo.mat[2][2];
 
-    if (fabs(W) < 1e-12) {
+    if (fabs(denom) < 1e-12) {
         return Point2d(0.0, 0.0);
     }
-
-    return Point2d(X / W, Y / W);
+    //normalize da values
+    double normX = num1 / denom; 
+    double normY = num2 / denom; 
+    return Point2d(normX, normY);
 }
 
-// Solve 8x8 system using Gaussian elimination
-static bool solveLinear8x8(double A[8][9], double x[8])
+//Function to solvr 8 by 8 system
+static bool solveEight(double matrix[8][9], double result[8])
 {
     for (int col = 0; col < 8; col++) {
-        int pivotRow = col;
-
+        int pivot = col;
+        //get row with largest value in col
         for (int row = col + 1; row < 8; row++) {
-            if (fabs(A[row][col]) > fabs(A[pivotRow][col])) {
-                pivotRow = row;
+            if (fabs(matrix[row][col]) > fabs(matrix[pivot][col])) {
+                pivot = row;
             }
         }
-
-        if (fabs(A[pivotRow][col]) < 1e-12) {
+        //Check for singular matrix -> no solution
+        if (fabs(matrix[pivot][col]) < 1e-12) {
             return false;
         }
 
-        if (pivotRow != col) {
+        //swap curr row with pivot row if necessary
+        if (pivot != col) {
             for (int k = col; k < 9; k++) {
-                swap(A[col][k], A[pivotRow][k]);
+                swap(matrix[col][k], matrix[pivot][k]);
             }
         }
-
-        double pivotVal = A[col][col];
+        //normalize pivot row 
+        double pivVal = matrix[col][col];
         for (int k = col; k < 9; k++) {
-            A[col][k] /= pivotVal;
+            matrix[col][k] /= pivVal;
         }
-
         for (int row = 0; row < 8; row++) {
             if (row == col) continue;
 
-            double factor = A[row][col];
+            double scale = matrix[row][col];
             for (int k = col; k < 9; k++) {
-                A[row][k] -= factor * A[col][k];
+                matrix[row][k] -= scale * matrix[col][k];
             }
         }
     }
-
     for (int i = 0; i < 8; i++) {
-        x[i] = A[i][8];
+        result[i] = matrix[i][8];
     }
-
     return true;
 }
 
-// Estimate homography using 4 point pairs
-static bool estimateHomography4pt(const vector<Point2d>& srcPts,
-                                  const vector<Point2d>& dstPts,
-                                  HMatrix& H)
+// Function to estimate homography 
+static bool estHomo(const vector<Point2d>& src,
+                                  const vector<Point2d>& dist,
+                                  HMat& matrix)
 {
-    if (srcPts.size() != 4 || dstPts.size() != 4) {
+    if (src.size() != 4 || dist.size() != 4) {
         return false;
     }
 
-    double A[8][9] = {0.0};
+    double res[8][9] = {0.0};
 
     for (int i = 0; i < 4; i++) {
-        double x = srcPts[i].x;
-        double y = srcPts[i].y;
-        double u = dstPts[i].x;
-        double v = dstPts[i].y;
-
-        A[2 * i][0] = x;
-        A[2 * i][1] = y;
-        A[2 * i][2] = 1.0;
-        A[2 * i][3] = 0.0;
-        A[2 * i][4] = 0.0;
-        A[2 * i][5] = 0.0;
-        A[2 * i][6] = -u * x;
-        A[2 * i][7] = -u * y;
-        A[2 * i][8] = u;
-
-        A[2 * i + 1][0] = 0.0;
-        A[2 * i + 1][1] = 0.0;
-        A[2 * i + 1][2] = 0.0;
-        A[2 * i + 1][3] = x;
-        A[2 * i + 1][4] = y;
-        A[2 * i + 1][5] = 1.0;
-        A[2 * i + 1][6] = -v * x;
-        A[2 * i + 1][7] = -v * y;
-        A[2 * i + 1][8] = v;
+        double x = src[i].x;
+        double y = src[i].y;
+        double u = dist[i].x;
+        double v = dist[i].y;
+        //setup eq system
+        res[2 * i][0] = x;
+        res[2 * i][1] = y;
+        res[2 * i][2] = 1.0;
+        res[2 * i][3] = 0.0;
+        res[2 * i][4] = 0.0;
+        res[2 * i][5] = 0.0;
+        res[2 * i][6] = -u * x;
+        res[2 * i][7] = -u * y;
+        res[2 * i][8] = u;
+        res[2 * i + 1][0] = 0.0;
+        res[2 * i + 1][1] = 0.0;
+        res[2 * i + 1][2] = 0.0;
+        res[2 * i + 1][3] = x;
+        res[2 * i + 1][4] = y;
+        res[2 * i + 1][5] = 1.0;
+        res[2 * i + 1][6] = -v * x;
+        res[2 * i + 1][7] = -v * y;
+        res[2 * i + 1][8] = v;
     }
 
-    double sol[8];
-    if (!solveLinear8x8(A, sol)) {
+    double out[8];
+    if (!solveEight(res, out)) {
         return false;
     }
-
-    H.h[0][0] = sol[0];
-    H.h[0][1] = sol[1];
-    H.h[0][2] = sol[2];
-    H.h[1][0] = sol[3];
-    H.h[1][1] = sol[4];
-    H.h[1][2] = sol[5];
-    H.h[2][0] = sol[6];
-    H.h[2][1] = sol[7];
-    H.h[2][2] = 1.0;
+    //fill out the homography matrix
+    matrix.mat[0][0] = out[0], matrix.mat[0][1] = out[1], matrix.mat[0][2] = out[2];
+    matrix.mat[1][0] = out[3], matrix.mat[1][1] = out[4], matrix.mat[1][2] = out[5];
+    matrix.mat[2][0] = out[6], matrix.mat[2][1] = out[7], matrix.mat[2][2] = 1.0;
 
     return true;
 }
@@ -316,7 +314,7 @@ static bool estimateHomography4pt(const vector<Point2d>& srcPts,
 static bool refineHomographyLS(const vector<Point2d>& srcPts,
                                const vector<Point2d>& dstPts,
                                const vector<int>& inlierIdx,
-                               HMatrix& H)
+                               HMat& H)
 {
     if (inlierIdx.size() < 4) {
         return false;
@@ -360,23 +358,23 @@ static bool refineHomographyLS(const vector<Point2d>& srcPts,
         return false;
     }
 
-    H.h[0][0] = sol.at<double>(0, 0);
-    H.h[0][1] = sol.at<double>(1, 0);
-    H.h[0][2] = sol.at<double>(2, 0);
-    H.h[1][0] = sol.at<double>(3, 0);
-    H.h[1][1] = sol.at<double>(4, 0);
-    H.h[1][2] = sol.at<double>(5, 0);
-    H.h[2][0] = sol.at<double>(6, 0);
-    H.h[2][1] = sol.at<double>(7, 0);
-    H.h[2][2] = 1.0;
+    H.mat[0][0] = sol.at<double>(0, 0);
+    H.mat[0][1] = sol.at<double>(1, 0);
+    H.mat[0][2] = sol.at<double>(2, 0);
+    H.mat[1][0] = sol.at<double>(3, 0);
+    H.mat[1][1] = sol.at<double>(4, 0);
+    H.mat[1][2] = sol.at<double>(5, 0);
+    H.mat[2][0] = sol.at<double>(6, 0);
+    H.mat[2][1] = sol.at<double>(7, 0);
+    H.mat[2][2] = 1.0;
 
     return true;
 }
 
 // Compute reprojection error
-static double getReprojError(const HMatrix& H, const Point2d& srcPt, const Point2d& dstPt)
+static double getReprojError(const HMat& H, const Point2d& srcPt, const Point2d& dstPt)
 {
-    Point2d mappedPt = applyH(H, srcPt);
+    Point2d mappedPt = applyHomo(H, srcPt);
     double dx = mappedPt.x - dstPt.x;
     double dy = mappedPt.y - dstPt.y;
 
@@ -386,7 +384,7 @@ static double getReprojError(const HMatrix& H, const Point2d& srcPt, const Point
 // Estimate homography using RANSAC
 static bool estimateHomographyRANSAC(const vector<Point2d>& srcPts,
                                      const vector<Point2d>& dstPts,
-                                     HMatrix& bestH,
+                                     HMat& bestH,
                                      vector<int>& bestInliers,
                                      int numIter = 3000,
                                      double thresh = 3.0)
@@ -416,8 +414,8 @@ static bool estimateHomographyRANSAC(const vector<Point2d>& srcPts,
             dstSample[i] = dstPts[pickIdx[i]];
         }
 
-        HMatrix Htemp;
-        if (!estimateHomography4pt(srcSample, dstSample, Htemp)) {
+        HMat Htemp;
+        if (!estHomo(srcSample, dstSample, Htemp)) {
             continue;
         }
 
@@ -448,7 +446,7 @@ static bool estimateHomographyRANSAC(const vector<Point2d>& srcPts,
     return refineHomographyLS(srcPts, dstPts, bestInliers, bestH);
 }
 
-// Find SIFT matches between two images
+
 static void getSIFTMatches(const Mat& img1,
                            const Mat& img2,
                            vector<Point2d>& pts1,
@@ -545,15 +543,15 @@ static void savePointPairs(const vector<Point2d>& srcPts,
 
 // Warp one image into panorama canvas and accumulate values
 static void warpAndAdd(const Mat& srcImg,
-                       const HMatrix& H_src_to_pano,
+                       const HMat& H_src_to_pano,
                        Mat& sumImg,
                        Mat& countImg)
 {
-    HMatrix H_pano_to_src = inverseH(H_src_to_pano);
+    HMat H_pano_to_src = invertMat(H_src_to_pano);
 
     for (int i = 0; i < sumImg.rows; i++) {
         for (int j = 0; j < sumImg.cols; j++) {
-            Point2d srcPt = applyH(H_pano_to_src, Point2d(j, i));
+            Point2d srcPt = applyHomo(H_pano_to_src, Point2d(j, i));
             double x = srcPt.x;
             double y = srcPt.y;
 
@@ -562,7 +560,7 @@ static void warpAndAdd(const Mat& srcImg,
                 Vec3d& sumPixel = sumImg.at<Vec3d>(i, j);
 
                 for (int ch = 0; ch < 3; ch++) {
-                    sumPixel[ch] += bilinearInterp(srcImg, y, x, ch);
+                    sumPixel[ch] += biInter(srcImg, y, x, ch);
                 }
 
                 countImg.at<double>(i, j) += 1.0;
@@ -572,14 +570,14 @@ static void warpAndAdd(const Mat& srcImg,
 }
 
 // Get transformed corner positions
-static vector<Point2d> getWarpedCorners(const HMatrix& H, int width, int height)
+static vector<Point2d> getWarpedCorners(const HMat& H, int width, int height)
 {
     vector<Point2d> corners;
 
-    corners.push_back(applyH(H, Point2d(0, 0)));
-    corners.push_back(applyH(H, Point2d(width - 1, 0)));
-    corners.push_back(applyH(H, Point2d(0, height - 1)));
-    corners.push_back(applyH(H, Point2d(width - 1, height - 1)));
+    corners.push_back(applyHomo(H, Point2d(0, 0)));
+    corners.push_back(applyHomo(H, Point2d(width - 1, 0)));
+    corners.push_back(applyHomo(H, Point2d(0, height - 1)));
+    corners.push_back(applyHomo(H, Point2d(width - 1, height - 1)));
 
     return corners;
 }
@@ -639,7 +637,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    HMatrix H_left_mid, H_right_mid;
+    HMat H_left_mid, H_right_mid;
     vector<int> inliersLeft, inliersRight;
 
     if (!estimateHomographyRANSAC(leftPts, midPts1, H_left_mid, inliersLeft)) {
@@ -658,10 +656,10 @@ int main(int argc, char* argv[])
     savePointPairs(rightPts, midPts2, inliersRight, rightPtsName);
 
     // Middle image is the reference
-    HMatrix I{};
-    I.h[0][0] = 1.0; I.h[0][1] = 0.0; I.h[0][2] = 0.0;
-    I.h[1][0] = 0.0; I.h[1][1] = 1.0; I.h[1][2] = 0.0;
-    I.h[2][0] = 0.0; I.h[2][1] = 0.0; I.h[2][2] = 1.0;
+    HMat I{};
+    I.mat[0][0] = 1.0; I.mat[0][1] = 0.0; I.mat[0][2] = 0.0;
+    I.mat[1][0] = 0.0; I.mat[1][1] = 1.0; I.mat[1][2] = 0.0;
+    I.mat[2][0] = 0.0; I.mat[2][1] = 0.0; I.mat[2][2] = 1.0;
 
     vector<Point2d> allCorners;
     vector<Point2d> leftCorners = getWarpedCorners(H_left_mid, width, height);
@@ -685,14 +683,14 @@ int main(int argc, char* argv[])
     }
 
     // Shift all warped images so panorama starts at (0,0)
-    HMatrix T{};
-    T.h[0][0] = 1.0; T.h[0][1] = 0.0; T.h[0][2] = -minX;
-    T.h[1][0] = 0.0; T.h[1][1] = 1.0; T.h[1][2] = -minY;
-    T.h[2][0] = 0.0; T.h[2][1] = 0.0; T.h[2][2] = 1.0;
+    HMat T{};
+    T.mat[0][0] = 1.0; T.mat[0][1] = 0.0; T.mat[0][2] = -minX;
+    T.mat[1][0] = 0.0; T.mat[1][1] = 1.0; T.mat[1][2] = -minY;
+    T.mat[2][0] = 0.0; T.mat[2][1] = 0.0; T.mat[2][2] = 1.0;
 
-    HMatrix H_left_pano = multiplyH(T, H_left_mid);
-    HMatrix H_mid_pano = multiplyH(T, I);
-    HMatrix H_right_pano = multiplyH(T, H_right_mid);
+    HMat H_left_pano = matrixMult(T, H_left_mid);
+    HMat H_mid_pano = matrixMult(T, I);
+    HMat H_right_pano = matrixMult(T, H_right_mid);
 
     int panoWidth = static_cast<int>(ceil(maxX - minX + 1.0));
     int panoHeight = static_cast<int>(ceil(maxY - minY + 1.0));
