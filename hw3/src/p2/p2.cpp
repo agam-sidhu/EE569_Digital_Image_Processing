@@ -68,23 +68,6 @@ static void writeraw(const string& filename, const vector<uint8_t>& buffer)
     }
     file.close();
 }
-// Function to convert raw data to BGR format
-static Mat toBGR(const vector<uint8_t> &image, int width, int height)
-{
-    Mat transformed(height, width, CV_8UC3);
-    for (int row = 0; row < height; row++) {
-        for (int col = 0; col < width; col++) {
-            int val = row * width + col;
-            int i = val * 3;
-            Vec3b& channel = transformed.at<Vec3b>(row, col);
-            channel[0] = image[i + 2]; //B val
-            channel[1] = image[i + 1]; // G val 
-            channel[2] = image[i + 0]; // R val 
-        }
-    }
-    return transformed;
-}
-
 // Convert image into raw RGB
 static vector<uint8_t> toRaw(const Mat &image)
 {
@@ -101,6 +84,22 @@ static vector<uint8_t> toRaw(const Mat &image)
         }
     }
     return output;
+}
+// Function to convert raw data to BGR format
+static Mat toBGR(const vector<uint8_t> &image, int width, int height)
+{
+    Mat transformed(height, width, CV_8UC3);
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            int val = row * width + col;
+            int i = val * 3;
+            Vec3b& channel = transformed.at<Vec3b>(row, col);
+            channel[0] = image[i + 2]; //B val
+            channel[1] = image[i + 1]; // G val 
+            channel[2] = image[i + 0]; // R val 
+        }
+    }
+    return transformed;
 }
 
 // FUnction that gets the pixel val from the image
@@ -183,6 +182,10 @@ static HMat invertMat(const HMat& homo)
     double mid = b * (d * i - f * g);
     double low = c * (d * h - e * g);
     double determinant = upper - mid + low;
+    if (fabs(determinant) < 1e-12) {
+        cerr << "Error: SINGULAR matrix." << endl;
+        exit(1);
+    }
     //invert each row
     //row1
     out.mat[0][0] = (e * i - f * h) / determinant;
@@ -197,26 +200,6 @@ static HMat invertMat(const HMat& homo)
     out.mat[2][1]= -(a * h - b * g) / determinant;
     out.mat[2][2] = (a * e - b * d) / determinant;
     return out;
-}
-
-// Function to apply homography to a point 
-static Point2d applyHomo(const HMat& homo, const Point2d& p)
-{
-    ///get the point coordinates
-    double x = p.x;
-    double y = p.y;
-
-    double num1 = homo.mat[0][0] * x + homo.mat[0][1] * y + homo.mat[0][2];
-    double num2 = homo.mat[1][0] * x + homo.mat[1][1] * y + homo.mat[1][2];
-    double denom = homo.mat[2][0] * x + homo.mat[2][1] * y + homo.mat[2][2];
-
-    if (fabs(denom) < 1e-12) {
-        return Point2d(0.0, 0.0);
-    }
-    //normalize da values
-    double normX = num1 / denom; 
-    double normY = num2 / denom; 
-    return Point2d(normX, normY);
 }
 
 //Function to solvr 8 by 8 system
@@ -259,6 +242,27 @@ static bool solveEight(double matrix[8][9], double result[8])
         result[i] = matrix[i][8];
     }
     return true;
+}
+
+
+// Function to apply homography to a point 
+static Point2d applyHomo(const HMat& homo, const Point2d& p)
+{
+    ///get the point coordinates
+    double x = p.x;
+    double y = p.y;
+
+    double num1 = homo.mat[0][0] * x + homo.mat[0][1] * y + homo.mat[0][2];
+    double num2 = homo.mat[1][0] * x + homo.mat[1][1] * y + homo.mat[1][2];
+    double denom = homo.mat[2][0] * x + homo.mat[2][1] * y + homo.mat[2][2];
+
+    if (fabs(denom) < 1e-12) {
+        return Point2d(0.0, 0.0);
+    }
+    //normalize da values
+    double normX = num1 / denom; 
+    double normY = num2 / denom; 
+    return Point2d(normX, normY);
 }
 
 // Function to estimate homography 
@@ -310,277 +314,278 @@ static bool estHomo(const vector<Point2d>& src,
     return true;
 }
 
-// Refine homography using all inliers
-static bool refineHomographyLS(const vector<Point2d>& srcPts,
-                               const vector<Point2d>& dstPts,
-                               const vector<int>& inlierIdx,
-                               HMat& H)
+// Function to compute reprojection error
+static double repoError(const HMat& matrix, const Point2d& src, const Point2d& dist)
 {
-    if (inlierIdx.size() < 4) {
+    Point2d mappedPt = applyHomo(matrix, src);
+    double xDist = mappedPt.x - dist.x;
+    double yDist = mappedPt.y - dist.y;
+    double error = sqrt(xDist * xDist + yDist * yDist);
+    return error;
+}
+
+// Function to refine the homography 
+static bool refineHomo(const vector<Point2d>& src,
+                               const vector<Point2d>& dist,
+                               const vector<int>& lnIdx,
+                               HMat& matrix)
+{
+    if (lnIdx.size() < 4) {
         return false;
     }
 
-    int n = static_cast<int>(inlierIdx.size());
-    Mat A(2 * n, 8, CV_64F);
-    Mat b(2 * n, 1, CV_64F);
+    int n = static_cast<int>(lnIdx.size());
+    int twoN = 2 * n;
+    Mat sysMat(twoN, 8, CV_64F);
+    Mat rightVec(twoN, 1, CV_64F);
 
     for (int k = 0; k < n; k++) {
-        int idx = inlierIdx[k];
+        int id = lnIdx[k];
+        double x = src[id].x;
+        double y = src[id].y;
+        double u = dist[id].x;
+        double v = dist[id].y;
 
-        double x = srcPts[idx].x;
-        double y = srcPts[idx].y;
-        double u = dstPts[idx].x;
-        double v = dstPts[idx].y;
+        //fill out system matrix
+        sysMat.at<double>(2 * k, 0) = x;
+        sysMat.at<double>(2 * k, 1) = y;
+        sysMat.at<double>(2 * k, 2) = 1.0;
+        sysMat.at<double>(2 * k, 3) = 0.0;
+        sysMat.at<double>(2 * k, 4) = 0.0;
+        sysMat.at<double>(2 * k, 5) = 0.0;
+        sysMat.at<double>(2 * k, 6) = -u * x;
+        sysMat.at<double>(2 * k, 7) = -u * y;
+        rightVec.at<double>(2 * k, 0) = u;
 
-        A.at<double>(2 * k, 0) = x;
-        A.at<double>(2 * k, 1) = y;
-        A.at<double>(2 * k, 2) = 1.0;
-        A.at<double>(2 * k, 3) = 0.0;
-        A.at<double>(2 * k, 4) = 0.0;
-        A.at<double>(2 * k, 5) = 0.0;
-        A.at<double>(2 * k, 6) = -u * x;
-        A.at<double>(2 * k, 7) = -u * y;
-        b.at<double>(2 * k, 0) = u;
-
-        A.at<double>(2 * k + 1, 0) = 0.0;
-        A.at<double>(2 * k + 1, 1) = 0.0;
-        A.at<double>(2 * k + 1, 2) = 0.0;
-        A.at<double>(2 * k + 1, 3) = x;
-        A.at<double>(2 * k + 1, 4) = y;
-        A.at<double>(2 * k + 1, 5) = 1.0;
-        A.at<double>(2 * k + 1, 6) = -v * x;
-        A.at<double>(2 * k + 1, 7) = -v * y;
-        b.at<double>(2 * k + 1, 0) = v;
+        sysMat.at<double>(2 * k + 1, 0) = 0.0;
+        sysMat.at<double>(2 * k + 1, 1) = 0.0;
+        sysMat.at<double>(2 * k + 1, 2) = 0.0;
+        sysMat.at<double>(2 * k + 1, 3) = x;
+        sysMat.at<double>(2 * k + 1, 4) = y;
+        sysMat.at<double>(2 * k + 1, 5) = 1.0;
+        sysMat.at<double>(2 * k + 1, 6) = -v * x;
+        sysMat.at<double>(2 * k + 1, 7) = -v * y;
+        rightVec.at<double>(2 * k + 1, 0) = v;
     }
 
-    Mat sol;
-    if (!solve(A, b, sol, DECOMP_SVD)) {
+    Mat result;
+    if (!solve(sysMat, rightVec, result, DECOMP_SVD)) {
         return false;
     }
 
-    H.mat[0][0] = sol.at<double>(0, 0);
-    H.mat[0][1] = sol.at<double>(1, 0);
-    H.mat[0][2] = sol.at<double>(2, 0);
-    H.mat[1][0] = sol.at<double>(3, 0);
-    H.mat[1][1] = sol.at<double>(4, 0);
-    H.mat[1][2] = sol.at<double>(5, 0);
-    H.mat[2][0] = sol.at<double>(6, 0);
-    H.mat[2][1] = sol.at<double>(7, 0);
-    H.mat[2][2] = 1.0;
+    //row by row fill out of matrix
+    matrix.mat[0][0] = result.at<double>(0, 0);
+    matrix.mat[0][1] = result.at<double>(1, 0);
+    matrix.mat[0][2] = result.at<double>(2, 0);
+    matrix.mat[1][0] = result.at<double>(3, 0);
+    matrix.mat[1][1] = result.at<double>(4, 0);
+    matrix.mat[1][2] = result.at<double>(5, 0);
+    matrix.mat[2][0] = result.at<double>(6, 0);
+    matrix.mat[2][1] = result.at<double>(7, 0);
+    matrix.mat[2][2] = 1.0;
 
     return true;
 }
-
-// Compute reprojection error
-static double getReprojError(const HMat& H, const Point2d& srcPt, const Point2d& dstPt)
-{
-    Point2d mappedPt = applyHomo(H, srcPt);
-    double dx = mappedPt.x - dstPt.x;
-    double dy = mappedPt.y - dstPt.y;
-
-    return sqrt(dx * dx + dy * dy);
-}
-
 // Estimate homography using RANSAC
-static bool estimateHomographyRANSAC(const vector<Point2d>& srcPts,
-                                     const vector<Point2d>& dstPts,
-                                     HMat& bestH,
-                                     vector<int>& bestInliers,
-                                     int numIter = 3000,
-                                     double thresh = 3.0)
+static bool estHomoRANSAC(const vector<Point2d>& src,
+                                     const vector<Point2d>& dst,
+                                     HMat& optHomo,
+                                     vector<int>& optLn,
+                                     int iter = 3000,
+                                     double tVal = 3.0)
 {
-    if (srcPts.size() != dstPts.size() || srcPts.size() < 4) {
+    if (src.size() != dst.size() || src.size() < 4) {
         return false;
     }
 
     mt19937 rng(569);
-    uniform_int_distribution<int> dist(0, static_cast<int>(srcPts.size()) - 1);
+    uniform_int_distribution<int> dist(0, static_cast<int>(src.size()) - 1);
+    //Best inline count for now
+    int maxLn = -1;
+    double minVal = numeric_limits<double>::max();
 
-    int maxInliers = -1;
-    double minErr = numeric_limits<double>::max();
-
-    for (int iter = 0; iter < numIter; iter++) {
-        vector<int> pickIdx;
-        while (pickIdx.size() < 4) {
+    for (int i = 0; i < iter; i++) {
+        vector<int> pId;
+        while (pId.size() < 4) {
             int r = dist(rng);
-            if (find(pickIdx.begin(), pickIdx.end(), r) == pickIdx.end()) {
-                pickIdx.push_back(r);
+            if (find(pId.begin(), pId.end(), r) == pId.end()) {
+                pId.push_back(r);
             }
         }
-
-        vector<Point2d> srcSample(4), dstSample(4);
-        for (int i = 0; i < 4; i++) {
-            srcSample[i] = srcPts[pickIdx[i]];
-            dstSample[i] = dstPts[pickIdx[i]];
+        //make sample point from picked indices
+        vector<Point2d> sampSrc(4), sampDist(4);
+        for (int j = 0; j < 4; j++) {
+            sampSrc[j] = src[pId[j]];
+            sampDist[j] = dst[pId[j]];
         }
-
-        HMat Htemp;
-        if (!estHomo(srcSample, dstSample, Htemp)) {
+        //estimate the homography (from sample)
+        HMat temp;
+        if (!estHomo(sampSrc, sampDist, temp)) {
             continue;
         }
-
-        vector<int> inliers;
-        double totalErr = 0.0;
-
-        for (int i = 0; i < static_cast<int>(srcPts.size()); i++) {
-            double err = getReprojError(Htemp, srcPts[i], dstPts[i]);
-            if (err < thresh) {
-                inliers.push_back(i);
-                totalErr += err;
+        //get inliners count
+        vector<int> ln;
+        double total = 0.0;
+        for (int k = 0; k < static_cast<int>(src.size()); k++) {
+            double err = repoError(temp, src[k], dst[k]);
+            if (err < tVal) {
+                ln.push_back(k);
+                total += err;
             }
         }
-
-        if (static_cast<int>(inliers.size()) > maxInliers ||
-            (static_cast<int>(inliers.size()) == maxInliers && totalErr < minErr)) {
-            maxInliers = static_cast<int>(inliers.size());
-            minErr = totalErr;
-            bestInliers = inliers;
-            bestH = Htemp;
+        int num = static_cast<int>(ln.size());
+        bool moreLn = num > maxLn;
+        bool sameLn = (num == maxLn && total < minVal);
+        if (moreLn || sameLn) {
+            maxLn = num;
+            minVal = total;
+            optLn = ln;
+            optHomo = temp;
         }
     }
 
-    if (maxInliers < 4) {
+    if (maxLn < 4) {
         return false;
     }
 
-    return refineHomographyLS(srcPts, dstPts, bestInliers, bestH);
+    return refineHomo(src, dst, optLn, optHomo);
 }
 
-
-static void getSIFTMatches(const Mat& img1,
-                           const Mat& img2,
-                           vector<Point2d>& pts1,
-                           vector<Point2d>& pts2,
-                           vector<KeyPoint>& kp1,
-                           vector<KeyPoint>& kp2,
-                           vector<DMatch>& goodMatches)
+//Function to find SIFT matches
+static void getSIFT(const Mat& image1,
+                           const Mat& image2,
+                           vector<Point2d>& p1,
+                           vector<Point2d>& p2,
+                           vector<KeyPoint>& key1,
+                           vector<KeyPoint>& key2,
+                           vector<DMatch>& match)
 {
-    Mat gray1, gray2;
-    cvtColor(img1, gray1, COLOR_BGR2GRAY);
-    cvtColor(img2, gray2, COLOR_BGR2GRAY);
+    //convert to grayscale
+    Mat g1, g2;
+    cvtColor(image1, g1, COLOR_BGR2GRAY);
+    cvtColor(image2, g2, COLOR_BGR2GRAY);
 
+    //detect and compute SIFT features
     Ptr<SIFT> sift = SIFT::create(3000);
-    Mat desc1, desc2;
-
-    sift->detectAndCompute(gray1, noArray(), kp1, desc1);
-    sift->detectAndCompute(gray2, noArray(), kp2, desc2);
-
+    Mat val1, val2;
+    sift->detectAndCompute(g1, noArray(), key1, val1);
+    sift->detectAndCompute(g2, noArray(), key2, val2);
+    //knn runner with k=2 
     BFMatcher matcher(NORM_L2);
-    vector<vector<DMatch>> knnMatches;
-    matcher.knnMatch(desc1, desc2, knnMatches, 2);
+    vector<vector<DMatch>> knnOut;
+    matcher.knnMatch(val1, val2, knnOut, 2);
 
-    const float ratioThresh = 0.75f;
+    const float tRatio = 0.75f;
+    for (size_t i = 0; i < knnOut.size(); i++) {
+        if (knnOut[i].size() < 2) continue;
+        //best & 2nd best match
+        const DMatch& mat1 = knnOut[i][0];
+        const DMatch& mat2 = knnOut[i][1];
 
-    for (size_t i = 0; i < knnMatches.size(); i++) {
-        if (knnMatches[i].size() < 2) continue;
-
-        const DMatch& m1 = knnMatches[i][0];
-        const DMatch& m2 = knnMatches[i][1];
-
-        if (m1.distance < ratioThresh * m2.distance) {
-            goodMatches.push_back(m1);
-            pts1.push_back(kp1[m1.queryIdx].pt);
-            pts2.push_back(kp2[m1.trainIdx].pt);
+        //save results 
+        if (mat1.distance < tRatio * mat2.distance) {
+            match.push_back(mat1);
+            p1.push_back(key1[mat1.queryIdx].pt);
+            p2.push_back(key2[mat1.trainIdx].pt);
         }
     }
 }
 
-// Save image showing selected matches
-static void saveMatchFigure(const Mat& img1,
-                            const Mat& img2,
-                            const vector<KeyPoint>& kp1,
-                            const vector<KeyPoint>& kp2,
-                            const vector<DMatch>& matches,
-                            const string& outName,
-                            int maxPts = 50)
+// Function to save the matched points
+static void savePair(const vector<Point2d>& src,
+                           const vector<Point2d>& dist,
+                           const vector<int>& ln,
+                           const string& outFileName,
+                           int maxP = 20)
 {
-    vector<DMatch> drawList = matches;
+    ofstream fout(outFileName);
+    if (!fout) {
+        cerr << "Warning: Can't Open file " << outFileName << endl;
+        return;
+    }
+    //header
+    fout << "Index\tSrcX\tSrcY\tDstX\tDstY\n";
 
-    sort(drawList.begin(), drawList.end(),
+    int n = min(static_cast<int>(ln.size()), maxP);
+    for (int i = 0; i < n; i++) {
+        int id = ln[i];
+        fout << id << "\t"
+             << src[id].x << "\t"
+             << src[id].y << "\t"
+             << dist[id].x << "\t"
+             << dist[id].y << "\n";
+    }
+    fout.close();
+}
+// Function to save the match gigs 
+static void saveFig(const Mat& image1,
+                            const Mat& image2,
+                            const vector<KeyPoint>& key1,
+                            const vector<KeyPoint>& key2,
+                            const vector<DMatch>& matches,
+                            const string& outFileName,
+                            int maxP = 50)
+{
+    vector<DMatch> matchList = matches;
+    //sor tmatches 
+    sort(matchList.begin(), matchList.end(),
          [](const DMatch& a, const DMatch& b) {
              return a.distance < b.distance;
          });
-
-    if (static_cast<int>(drawList.size()) > maxPts) {
-        drawList.resize(maxPts);
+    //keep only top maxP matches
+    if (static_cast<int>(matchList.size()) > maxP) {
+        matchList.resize(maxP);
     }
 
-    Mat outImg;
-    drawMatches(img1, kp1, img2, kp2, drawList, outImg,
+    //draw matches
+    Mat output;
+    drawMatches(image1, key1, image2, key2, matchList, output,
                 Scalar::all(-1), Scalar::all(-1), vector<char>(),
                 DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
 
-    imwrite(outName, outImg);
+    imwrite(outFileName, output);
+}
+//Function to warp corners (w/ homography)
+static vector<Point2d> warpCorner(const HMat& matrix, int width, int height)
+{
+    vector<Point2d> crn;
+    crn.push_back(applyHomo(matrix, Point2d(0, 0)));
+    crn.push_back(applyHomo(matrix, Point2d(width - 1, 0)));
+    crn.push_back(applyHomo(matrix, Point2d(0, height - 1)));
+    crn.push_back(applyHomo(matrix, Point2d(width - 1, height - 1)));
+
+    return crn;
 }
 
-// Save point pairs into txt file
-static void savePointPairs(const vector<Point2d>& srcPts,
-                           const vector<Point2d>& dstPts,
-                           const vector<int>& inliers,
-                           const string& outName,
-                           int maxPts = 20)
+// Function to warp and add the image to the panorama
+static void warpAdd(const Mat& image,
+                       const HMat& homoFwd,
+                       Mat& buffSum,
+                       Mat& buffCount)
 {
-    ofstream fout(outName);
-    if (!fout) {
-        cerr << "Warning: cannot open file " << outName << endl;
-        return;
-    }
+    //invert the homography 
+    HMat homoInv = invertMat(homoFwd);
 
-    fout << "Index\tSrcX\tSrcY\tDstX\tDstY\n";
-
-    int n = min(static_cast<int>(inliers.size()), maxPts);
-    for (int i = 0; i < n; i++) {
-        int idx = inliers[i];
-        fout << idx << "\t"
-             << srcPts[idx].x << "\t"
-             << srcPts[idx].y << "\t"
-             << dstPts[idx].x << "\t"
-             << dstPts[idx].y << "\n";
-    }
-
-    fout.close();
-}
-
-// Warp one image into panorama canvas and accumulate values
-static void warpAndAdd(const Mat& srcImg,
-                       const HMat& H_src_to_pano,
-                       Mat& sumImg,
-                       Mat& countImg)
-{
-    HMat H_pano_to_src = invertMat(H_src_to_pano);
-
-    for (int i = 0; i < sumImg.rows; i++) {
-        for (int j = 0; j < sumImg.cols; j++) {
-            Point2d srcPt = applyHomo(H_pano_to_src, Point2d(j, i));
-            double x = srcPt.x;
-            double y = srcPt.y;
-
-            if (x >= 0.0 && x <= srcImg.cols - 1.0 &&
-                y >= 0.0 && y <= srcImg.rows - 1.0) {
-                Vec3d& sumPixel = sumImg.at<Vec3d>(i, j);
-
-                for (int ch = 0; ch < 3; ch++) {
-                    sumPixel[ch] += biInter(srcImg, y, x, ch);
-                }
-
-                countImg.at<double>(i, j) += 1.0;
+    for (int i = 0; i < buffSum.rows; i++) {
+        for (int j = 0; j < buffSum.cols; j++) {
+            Point2d src = applyHomo(homoInv, Point2d(j, i));
+            double x = src.x;
+            double y = src.y;
+            //check if point is inbounds
+            bool inBounds = x >= 0.0 && x <= image.cols - 1.0 &&
+                            y >= 0.0 && y <= image.rows - 1.0;
+            if (!inBounds) continue;
+            //get pixel val
+            Vec3d& pix = buffSum.at<Vec3d>(i, j);
+            for (int c = 0; c < 3; c++) {
+                pix[c] += biInter(image, y, x, c); 
             }
+
+            buffCount.at<double>(i, j) += 1.0;
         }
     }
 }
 
-// Get transformed corner positions
-static vector<Point2d> getWarpedCorners(const HMat& H, int width, int height)
-{
-    vector<Point2d> corners;
-
-    corners.push_back(applyHomo(H, Point2d(0, 0)));
-    corners.push_back(applyHomo(H, Point2d(width - 1, 0)));
-    corners.push_back(applyHomo(H, Point2d(0, height - 1)));
-    corners.push_back(applyHomo(H, Point2d(width - 1, height - 1)));
-
-    return corners;
-}
 
 // Main function
 int main(int argc, char* argv[])
@@ -592,124 +597,122 @@ int main(int argc, char* argv[])
              << endl;
         return 1;
     }
-
-    string leftName = argv[1];
-    string midName = argv[2];
-    string rightName = argv[3];
-    string panoName = argv[4];
-
+    //parse the input args 
+    string leftPath = argv[1];
+    string midPath = argv[2];
+    string rightPath = argv[3];
+    string panoPath = argv[4];
+    //parse w*h dims
     int width = atoi(argv[5]);
     int height = atoi(argv[6]);
+    //parse output file paths
+    string leftMatch=argv[7];
+    string rightMatch = argv[8];
+    string leftPoint = argv[9];
+    string rightPoint = argv[10];
 
-    string leftMatchName = argv[7];
-    string rightMatchName = argv[8];
-    string leftPtsName = argv[9];
-    string rightPtsName = argv[10];
-
-    if (width <= 0 || height <= 0) {
-        cerr << "Error: width and height must be positive." << endl;
-        return 1;
-    }
-
+    //Load images
     vector<uint8_t> leftRaw, midRaw, rightRaw;
-    readraw(leftName, leftRaw, width, height, 3);
-    readraw(midName, midRaw, width, height, 3);
-    readraw(rightName, rightRaw, width, height, 3);
+    readraw(leftPath, leftRaw, width, height, 3);
+    readraw(midPath, midRaw, width, height, 3);
+    readraw(rightPath, rightRaw, width, height, 3);
 
+    //convert to BGR format
     Mat leftImg = toBGR(leftRaw, width, height);
     Mat midImg = toBGR(midRaw, width, height);
     Mat rightImg = toBGR(rightRaw, width, height);
 
-    // Left to middle matching
-    vector<Point2d> leftPts, midPts1;
-    vector<KeyPoint> kpLeft, kpMid1;
-    vector<DMatch> matchLeftMid;
-    getSIFTMatches(leftImg, midImg, leftPts, midPts1, kpLeft, kpMid1, matchLeftMid);
+    // Left to mid match
+    vector<Point2d> leftPt, midPoint;
+    vector<KeyPoint> keyL, keyM;
+    vector<DMatch> lmMatch;
+    getSIFT(leftImg, midImg, leftPt, midPoint, keyL, keyM, lmMatch);
 
-    // Right to middle matching
-    vector<Point2d> rightPts, midPts2;
-    vector<KeyPoint> kpRight, kpMid2;
-    vector<DMatch> matchRightMid;
-    getSIFTMatches(rightImg, midImg, rightPts, midPts2, kpRight, kpMid2, matchRightMid);
+    // Right to mid match
+    vector<Point2d> rightPt, midPoint2;
+    vector<KeyPoint> keyR, keyM2;
+    vector<DMatch> rmMatch;
+    getSIFT(rightImg, midImg, rightPt, midPoint2, keyR, keyM2, rmMatch);
 
-    if (leftPts.size() < 4 || rightPts.size() < 4) {
+    if (leftPt.size() < 4 || rightPt.size() < 4) {
         cerr << "Error: not enough matched points." << endl;
         return 1;
     }
 
-    HMat H_left_mid, H_right_mid;
-    vector<int> inliersLeft, inliersRight;
+    //estimate homographies with RANSAC
+    HMat hLM, hRM;
+    vector<int> lnL, lnR;
 
-    if (!estimateHomographyRANSAC(leftPts, midPts1, H_left_mid, inliersLeft)) {
-        cerr << "Error: failed to estimate left-to-middle homography." << endl;
+    if (!estHomoRANSAC(leftPt, midPoint, hLM, lnL)) {
+        cerr << "Error: failed left to mid." << endl;
         return 1;
     }
 
-    if (!estimateHomographyRANSAC(rightPts, midPts2, H_right_mid, inliersRight)) {
-        cerr << "Error: failed to estimate right-to-middle homography." << endl;
+    if (!estHomoRANSAC(rightPt, midPoint2, hRM, lnR)) {
+        cerr << "Error: failed right to mid ." << endl;
         return 1;
     }
+    //Save figures + point tables
+    saveFig(leftImg, midImg, keyL, keyM, lmMatch, leftMatch);
+    saveFig(rightImg, midImg, keyR, keyM2, rmMatch, rightMatch);
+    savePair(leftPt, midPoint, lnL, leftPoint);
+    savePair(rightPt, midPoint2, lnR, rightPoint);
 
-    saveMatchFigure(leftImg, midImg, kpLeft, kpMid1, matchLeftMid, leftMatchName);
-    saveMatchFigure(rightImg, midImg, kpRight, kpMid2, matchRightMid, rightMatchName);
-    savePointPairs(leftPts, midPts1, inliersLeft, leftPtsName);
-    savePointPairs(rightPts, midPts2, inliersRight, rightPtsName);
+    // Create identity homography (middle image)
+    HMat identity{};
+    identity.mat[0][0] = 1.0; identity.mat[0][1] = 0.0; identity.mat[0][2] = 0.0;
+    identity.mat[1][0] = 0.0; identity.mat[1][1] = 1.0; identity.mat[1][2] = 0.0;
+    identity.mat[2][0] = 0.0; identity.mat[2][1] = 0.0; identity.mat[2][2] = 1.0;
 
-    // Middle image is the reference
-    HMat I{};
-    I.mat[0][0] = 1.0; I.mat[0][1] = 0.0; I.mat[0][2] = 0.0;
-    I.mat[1][0] = 0.0; I.mat[1][1] = 1.0; I.mat[1][2] = 0.0;
-    I.mat[2][0] = 0.0; I.mat[2][1] = 0.0; I.mat[2][2] = 1.0;
-
-    vector<Point2d> allCorners;
-    vector<Point2d> leftCorners = getWarpedCorners(H_left_mid, width, height);
-    vector<Point2d> midCorners = getWarpedCorners(I, width, height);
-    vector<Point2d> rightCorners = getWarpedCorners(H_right_mid, width, height);
-
-    allCorners.insert(allCorners.end(), leftCorners.begin(), leftCorners.end());
-    allCorners.insert(allCorners.end(), midCorners.begin(), midCorners.end());
-    allCorners.insert(allCorners.end(), rightCorners.begin(), rightCorners.end());
-
+    //Get the warped corners of 3 images (to find bounds)
+    vector<Point2d> totalCorner;
+    vector<Point2d> lc = warpCorner(hLM, width, height);
+    vector<Point2d> mc = warpCorner(identity, width, height);
+    vector<Point2d> rc = warpCorner(hRM, width, height);
+    //Warp corners to find panorama bounds
+    totalCorner.insert(totalCorner.end(), lc.begin(), lc.end());
+    totalCorner.insert(totalCorner.end(), mc.begin(), mc.end());
+    totalCorner.insert(totalCorner.end(), rc.begin(), rc.end());
+    //find min/max bounds 
     double minX = numeric_limits<double>::max();
     double minY = numeric_limits<double>::max();
     double maxX = -numeric_limits<double>::max();
     double maxY = -numeric_limits<double>::max();
 
-    for (const auto& pt : allCorners) {
-        minX = min(minX, pt.x);
-        minY = min(minY, pt.y);
-        maxX = max(maxX, pt.x);
-        maxY = max(maxY, pt.y);
+    for (const auto& p : totalCorner) {
+        minX = min(minX, p.x), maxX = max(maxX, p.x); //we are updating x bounds
+        minY = min(minY, p.y), maxY = max(maxY, p.y); //we are updating y bounds
     }
 
-    // Shift all warped images so panorama starts at (0,0)
-    HMat T{};
-    T.mat[0][0] = 1.0; T.mat[0][1] = 0.0; T.mat[0][2] = -minX;
-    T.mat[1][0] = 0.0; T.mat[1][1] = 1.0; T.mat[1][2] = -minY;
-    T.mat[2][0] = 0.0; T.mat[2][1] = 0.0; T.mat[2][2] = 1.0;
+    //tranlsation matrix to shift panorama to origin
+    HMat shiftMatrix{};
+    shiftMatrix.mat[0][0] = 1.0; shiftMatrix.mat[0][1] = 0.0; shiftMatrix.mat[0][2] = -minX;
+    shiftMatrix.mat[1][0] = 0.0; shiftMatrix.mat[1][1] = 1.0; shiftMatrix.mat[1][2] = -minY;
+    shiftMatrix.mat[2][0] = 0.0; shiftMatrix.mat[2][1] = 0.0; shiftMatrix.mat[2][2] = 1.0;
+    //get each homography with the shift applied 
+    HMat hLP = matrixMult(shiftMatrix, hLM);
+    HMat hMP = matrixMult(shiftMatrix, identity);
+    HMat hRP = matrixMult(shiftMatrix, hRM);
 
-    HMat H_left_pano = matrixMult(T, H_left_mid);
-    HMat H_mid_pano = matrixMult(T, I);
-    HMat H_right_pano = matrixMult(T, H_right_mid);
+    int pWidth = static_cast<int>(ceil(maxX - minX + 1.0));
+    int pHeight = static_cast<int>(ceil(maxY - minY + 1.0));
+    
+    //accumulate imgs into sum & count buffers
+    Mat buffSum(pHeight, pWidth, CV_64FC3, Scalar(0, 0, 0));
+    Mat buffCount(pHeight, pWidth, CV_64F, Scalar(0));
 
-    int panoWidth = static_cast<int>(ceil(maxX - minX + 1.0));
-    int panoHeight = static_cast<int>(ceil(maxY - minY + 1.0));
+    warpAdd(leftImg, hLP, buffSum, buffCount);
+    warpAdd(midImg, hMP, buffSum, buffCount);
+    warpAdd(rightImg, hRP, buffSum, buffCount);
 
-    Mat sumImg(panoHeight, panoWidth, CV_64FC3, Scalar(0, 0, 0));
-    Mat countImg(panoHeight, panoWidth, CV_64F, Scalar(0));
-
-    warpAndAdd(leftImg, H_left_pano, sumImg, countImg);
-    warpAndAdd(midImg, H_mid_pano, sumImg, countImg);
-    warpAndAdd(rightImg, H_right_pano, sumImg, countImg);
-
-    Mat panoImg(panoHeight, panoWidth, CV_8UC3, Scalar(0, 0, 0));
-
-    for (int i = 0; i < panoHeight; i++) {
-        for (int j = 0; j < panoWidth; j++) {
-            double cnt = countImg.at<double>(i, j);
+    Mat panoImg(pHeight, pWidth, CV_8UC3, Scalar(0, 0, 0));
+    //blend values into final panorama
+    for (int i = 0; i < pHeight; i++) {
+        for (int j = 0; j < pWidth; j++) {
+            double cnt = buffCount.at<double>(i, j);
 
             if (cnt > 0.0) {
-                Vec3d sumPixel = sumImg.at<Vec3d>(i, j);
+                Vec3d sumPixel = buffSum.at<Vec3d>(i, j);
                 Vec3b& outPixel = panoImg.at<Vec3b>(i, j);
 
                 for (int ch = 0; ch < 3; ch++) {
@@ -722,13 +725,14 @@ int main(int argc, char* argv[])
     }
 
     vector<uint8_t> panoRaw = toRaw(panoImg);
-    writeraw(panoName, panoRaw);
+    writeraw(panoPath, panoRaw);
 
-    cout << "Panorama size: " << panoWidth << " x " << panoHeight << endl;
-    cout << "Left-Middle matches: " << leftPts.size()
-         << ", inliers: " << inliersLeft.size() << endl;
-    cout << "Right-Middle matches: " << rightPts.size()
-         << ", inliers: " << inliersRight.size() << endl;
+    //Output stats
+    cout << "Panorama size: " << pWidth << " x " << pHeight << endl;
+    cout << "Left-Middle matches: " << leftPt.size()
+         << ", inliers: " << lnL.size() << endl;
+    cout << "Right-Middle matches: " << rightPt.size()
+         << ", inliers: " << lnR.size() << endl;
 
     return 0;
 }
