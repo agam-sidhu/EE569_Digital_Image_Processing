@@ -96,17 +96,6 @@ static vector<uint8_t> toBinary(const vector<uint8_t>& image, int width, int hei
     return biOut;
 }
 
-//Function to get binary pixel val
-static inline uint8_t getBP(const vector<uint8_t>& image, int width, int height, int row, int col)
-{
-    bool outside = row < 0 || row >= height || col < 0 || col >= width;
-    if (outside) {
-        return 0; //return 0 for pixels outside image
-    }
-    uint8_t result = image[row * width + col];
-    return result;
-}
-
 //Function to see if pixel is inside bounds
 static inline bool inBounds(int row, int col, int width, int height) {
     return row >= 0 && row < height && col >= 0 && col < width;
