@@ -3,7 +3,7 @@
  * USC ID: 3027948957
  * USC Email: agamsidh@usc.edu
  * Submission Date: March 15, 2026
- * Problem 3(a): Geometric Image Modification - Star Warping
+ * Problem 3(a): Basic morphological process implementation 
  */
 
 #include <iostream>
@@ -228,7 +228,7 @@ int main(int argc, char* argv[]) {
         cerr << "Usage: " << argv[0]
              << " input.raw output_prefix width height maxIterations\n";
         cerr << "Example: " << argv[0]
-             << " Jar.raw outputs/jar 512 512 30\n";
+             << " Jar.raw outputs/jar 512 512 100\n";
         return 1;
     }
     //parse input args
@@ -245,7 +245,7 @@ int main(int argc, char* argv[]) {
     vector<uint8_t> binary = toBinary(image, width, height);
     writeraw(output + "_binary.raw", toRaw(binary));
 
-    vector<int> checkPoint = {1, 10, 20};
+    vector<int> checkPoint = {20};
     //Runs algo until convergence/max iteration
     for (int step = 1; step <= maxIter; step++) {
         vector<uint8_t> prev = binary;
@@ -263,7 +263,6 @@ int main(int argc, char* argv[]) {
             return 0;
         }
     }
-
     writeraw(output + "_thin_final.raw", toRaw(binary));
     return 0;
 }

@@ -3,7 +3,7 @@
  * USC ID: 3027948957
  * USC Email: agamsidh@usc.edu
  * Submission Date: March 15, 2026
- * Problem 3(b): Connected Component Labeling
+ * Problem 3(b): Shape detection and counting
  */
 
 #include <iostream>
@@ -15,13 +15,13 @@
 #include <string>
 #include <cstdlib>
 #include <cmath>
-
 using namespace std;
 
 //Clamp function
 static inline int clamp(int x, int low, int high) {
     return max(low, min(high, x));
 }
+
 //Read raw image function
 static void readraw(const string& filename, vector<uint8_t>& buffer, int width, int height, int channels)
 {
@@ -58,159 +58,177 @@ static void writeraw(const string& filename, const vector<uint8_t>& buffer)
     file.close();
 }
 
-//Binarize image using threshold 0.5 * Fmax
-static vector<uint8_t> binarizeImage(const vector<uint8_t>& gray,
-                                     int width,
-                                     int height)
+//Function to convert into raw from binary
+static vector<uint8_t> toRaw(const vector<uint8_t>& bi) {
+    size_t n = bi.size();
+    vector<uint8_t> output(n, 0);
+    for (size_t i = 0; i < n; i++) {
+        if (bi[i] == 1) {
+            output[i] = 255; //this well set to on
+        } else {
+            output[i] = 0; // set to off
+        }
+    }
+    return output;
+}
+
+//Function to binarize image
+static vector<uint8_t> toBinary(const vector<uint8_t>& image, int width, int height)
 {
-    uint8_t fmax = 0;
-    for (size_t i = 0; i < gray.size(); i++) {
-        fmax = max(fmax, gray[i]);
+    //find max pixel value
+    uint8_t fMax = 0;
+    for (size_t i = 0; i < image.size(); i++) {
+        fMax = max(fMax, image[i]); //if pizel is large -> update 
     }
 
-    const double thresh = 0.5 * static_cast<double>(fmax);
-    vector<uint8_t> binary(width * height, 0);
+    double tVal = 0.5 * static_cast<double>(fMax); //half of max
+    vector<uint8_t> biOut(width * height, 0);
 
     for (int i = 0; i < width * height; i++) {
-        binary[i] = (gray[i] > thresh) ? 1 : 0;
+        //check if pixel is aboved our threshold val
+        bool above = image[i] > tVal;  
+        if (above) {
+            biOut[i] = 1;
+        } else {
+            biOut[i] = 0; 
+        }
     }
-    return binary;
+    return biOut;
 }
 
-//Convert binary {0,1} to raw {0,255}
-static vector<uint8_t> binaryToRaw(const vector<uint8_t>& binary) {
-    vector<uint8_t> out(binary.size(), 0);
-    for (size_t i = 0; i < binary.size(); i++) {
-        out[i] = binary[i] ? 255 : 0;
+//Function to get binary pixel val
+static inline uint8_t getBP(const vector<uint8_t>& image, int width, int height, int row, int col)
+{
+    bool outside = row < 0 || row >= height || col < 0 || col >= width;
+    if (outside){
+        return 0 ; //return 0 for pixels outside image
     }
-    return out;
+    uint8_t result = image[row * width + col];
+    return result;
+    
 }
 
-struct ComponentInfo {
+//Store info about each connected component
+struct shapeInfo {
     int label;
     int area;
-    int minRow;
-    int maxRow;
-    int minCol;
-    int maxCol;
-    int holeCount;
+    int minR;
+    int maxR;
+    int minC;
+    int maxC;
+    int numHole;
 };
 
-static inline bool inside(int row, int col, int width, int height) {
+//Function to see if pixel is inside bounds
+static inline bool inBounds(int row, int col, int width, int height) {
     return row >= 0 && row < height && col >= 0 && col < width;
 }
 
-//Label white connected components
-static vector<ComponentInfo> labelWhiteComponents(const vector<uint8_t>& binary,
-                                                  int width,
-                                                  int height,
-                                                  vector<int>& labels)
+//Function that will label all connected compontnets 
+static vector<shapeInfo> labelComp(const vector<uint8_t>& binary,
+                                             int width, int height,
+                                             vector<int>& labels)
 {
     labels.assign(width * height, 0);
-    vector<ComponentInfo> comps;
-    int currentLabel = 0;
+    vector<shapeInfo> comps;
+    int currLabel = 0;
 
+    //4 connected neighbors
     const int dr[4] = {-1, 1, 0, 0};
     const int dc[4] = {0, 0, -1, 1};
 
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
             int idx = row * width + col;
-            if (binary[idx] == 0 || labels[idx] != 0) continue;
+            if (binary[idx] == 0 || labels[idx] != 0) continue; //skip background or already labeled
 
-            currentLabel++;
+            currLabel++;
             queue<pair<int,int>> q;
             q.push({row, col});
-            labels[idx] = currentLabel;
+            labels[idx] = currLabel;
 
-            ComponentInfo info;
-            info.label = currentLabel;
+            //setup info
+            shapeInfo info;
+            info.label = currLabel;
             info.area = 0;
-            info.minRow = info.maxRow = row;
-            info.minCol = info.maxCol = col;
-            info.holeCount = 0;
+            info.minR = info.maxR = row;
+            info.minC = info.maxC = col;
+            info.numHole = 0;
 
+            //flood fill to find all pixels in component
             while (!q.empty()) {
                 auto cur = q.front();
                 q.pop();
 
-                int r = cur.first;
-                int c = cur.second;
-                int id = r * width + c;
+                int r  = cur.first;
+                int c  = cur.second;
 
                 info.area++;
-                info.minRow = min(info.minRow, r);
-                info.maxRow = max(info.maxRow, r);
-                info.minCol = min(info.minCol, c);
-                info.maxCol = max(info.maxCol, c);
+                info.minR = min(info.minR, r);
+                info.maxR = max(info.maxR, r);
+                info.minC = min(info.minC, c);
+                info.maxC = max(info.maxC, c);
 
                 for (int k = 0; k < 4; k++) {
-                    int nr = r + dr[k];
-                    int nc = c + dc[k];
-                    if (!inside(nr, nc, width, height)) continue;
-
+                    int nr  = r + dr[k];
+                    int nc  = c + dc[k];
+                    if (!inBounds(nr, nc, width, height)) continue;
                     int nid = nr * width + nc;
                     if (binary[nid] == 1 && labels[nid] == 0) {
-                        labels[nid] = currentLabel;
+                        labels[nid] = currLabel;
                         q.push({nr, nc});
                     }
                 }
             }
-
             comps.push_back(info);
         }
     }
     return comps;
 }
 
-//Count black holes inside one object bounding box
-static int countHolesForComponent(const vector<uint8_t>& binary,
-                                  int width,
-                                  int height,
-                                  const ComponentInfo& comp)
+//Function to count black holes 
+static int countHole(const vector<uint8_t>& binary,
+                      int width, int height,
+                      const shapeInfo& comp)
 {
-    int r0 = max(0, comp.minRow);
-    int r1 = min(height - 1, comp.maxRow);
-    int c0 = max(0, comp.minCol);
-    int c1 = min(width - 1, comp.maxCol);
+    //get the coords of bound box
+    int r0 = max(0, comp.minR);
+    int r1 = min(height - 1, comp.maxR);
+    int c0 = max(0, comp.minC);
+    int c1 = min(width - 1, comp.maxC);
+    int bh = r1 - r0 + 1;
+    int bw = c1 - c0 + 1; 
 
-    const int bh = r1 - r0 + 1;
-    const int bw = c1 - c0 + 1;
-
+    //xtract the sub image of components box
     vector<uint8_t> sub(bh * bw, 0);
-
-    //Object area becomes 1, background becomes 0
-    for (int r = r0; r <= r1; r++) {
-        for (int c = c0; c <= c1; c++) {
+    for (int r = r0; r <= r1; r++)
+        for (int c = c0; c <= c1; c++)
             sub[(r - r0) * bw + (c - c0)] = binary[r * width + c];
-        }
-    }
 
-    //Visited for background black regions
     vector<int> vis(bh * bw, 0);
     const int dr[4] = {-1, 1, 0, 0};
     const int dc[4] = {0, 0, -1, 1};
 
-    auto insideSub = [&](int r, int c) {
+    auto inSub = [&](int r, int c) {
         return r >= 0 && r < bh && c >= 0 && c < bw;
     };
 
-    //Flood external black regions touching box boundary
+    //flood fill 
     queue<pair<int,int>> q;
     for (int r = 0; r < bh; r++) {
         for (int c = 0; c < bw; c++) {
-            if (r != 0 && r != bh - 1 && c != 0 && c != bw - 1) continue;
+            bool onBorder = (r == 0 || r == bh - 1 || c == 0 || c == bw - 1);
+            if (!onBorder) continue;
             int idx = r * bw + c;
             if (sub[idx] == 0 && vis[idx] == 0) {
                 vis[idx] = 1;
                 q.push({r, c});
                 while (!q.empty()) {
-                    auto cur = q.front();
-                    q.pop();
+                    auto cur = q.front(); q.pop();
                     for (int k = 0; k < 4; k++) {
-                        int nr = cur.first + dr[k];
+                        int nr = cur.first  + dr[k];
                         int nc = cur.second + dc[k];
-                        if (!insideSub(nr, nc)) continue;
+                        if (!inSub(nr, nc)) continue;
                         int nid = nr * bw + nc;
                         if (sub[nid] == 0 && vis[nid] == 0) {
                             vis[nid] = 1;
@@ -222,22 +240,22 @@ static int countHolesForComponent(const vector<uint8_t>& binary,
         }
     }
 
-    //Remaining black regions are holes
+    //consider any univisited black pixedl as hole
     int holes = 0;
     for (int r = 0; r < bh; r++) {
         for (int c = 0; c < bw; c++) {
             int idx = r * bw + c;
             if (sub[idx] == 0 && vis[idx] == 0) {
+                //HOLE FOUNDDDDDD
                 holes++;
                 vis[idx] = 1;
                 q.push({r, c});
                 while (!q.empty()) {
-                    auto cur = q.front();
-                    q.pop();
+                    auto cur = q.front(); q.pop();
                     for (int k = 0; k < 4; k++) {
-                        int nr = cur.first + dr[k];
+                        int nr = cur.first  + dr[k];
                         int nc = cur.second + dc[k];
-                        if (!insideSub(nr, nc)) continue;
+                        if (!inSub(nr, nc)) continue;
                         int nid = nr * bw + nc;
                         if (sub[nid] == 0 && vis[nid] == 0) {
                             vis[nid] = 1;
@@ -248,21 +266,20 @@ static int countHolesForComponent(const vector<uint8_t>& binary,
             }
         }
     }
-
     return holes;
 }
 
-//Classify object as rectangle or circle
-static string classifyShape(const ComponentInfo& comp)
+//Classify shape as rectangle or circle using fill ratio
+static string detectShape(const shapeInfo& comp)
 {
-    const int boxH = comp.maxRow - comp.minRow + 1;
-    const int boxW = comp.maxCol - comp.minCol + 1;
-    const double boxArea = static_cast<double>(boxH) * static_cast<double>(boxW);
-    const double fillRatio = static_cast<double>(comp.area) / boxArea;
+    int bh = comp.maxR - comp.minR + 1; 
+    int bw = comp.maxC - comp.minC + 1;
+    double boxArea   = static_cast<double>(bh) * static_cast<double>(bw);
+    double fillRatio = static_cast<double>(comp.area) / boxArea; 
 
-    //Rectangles tend to fill their box much more
-    //Circles tend to have fill ratio near pi/4 ~ 0.785
-    if (fillRatio > 0.86) {
+    //rects shuld have rastio close to 1, circle will have less 
+    bool isRect = fillRatio > 0.82;
+    if (isRect) {
         return "rectangle";
     } else {
         return "circle";
@@ -270,67 +287,73 @@ static string classifyShape(const ComponentInfo& comp)
 }
 
 //Main function
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
     if (argc != 5) {
         cerr << "Usage: " << argv[0]
              << " input.raw output_binary.raw width height\n";
         return 1;
     }
 
-    const string inputPath = argv[1];
-    const string binaryOutPath = argv[2];
-    const int width = atoi(argv[3]);
-    const int height = atoi(argv[4]);
+    //parse input args
+    string input = argv[1];
+    string output = argv[2];
+    int width = atoi(argv[3]);
+    int height = atoi(argv[4]);
 
     if (width <= 0 || height <= 0) {
-        cerr << "Error: width and height must be positive.\n";
+        cerr << "Error: width and height must be positive." << endl;
         return 1;
     }
 
-    vector<uint8_t> gray;
-    readraw(inputPath, gray, width, height, 1);
+    //load images + convert to binary
+    vector<uint8_t> image;
+    readraw(input, image, width, height, 1);
+    vector<uint8_t> binary = toBinary(image, width, height);
+    writeraw(output, toRaw(binary)); //save binarized image
 
-    vector<uint8_t> binary = binarizeImage(gray, width, height);
-    writeraw(binaryOutPath, binaryToRaw(binary));
-
+    //labels all the white components
     vector<int> labels;
-    vector<ComponentInfo> comps = labelWhiteComponents(binary, width, height, labels);
+    vector<shapeInfo> components = labelComp(binary, width, height, labels);
 
-    int totalObjects = static_cast<int>(comps.size());
+    int totalShape  = static_cast<int>(components.size());
     int totalHoles = 0;
     int rectangleCount = 0;
     int circleCount = 0;
 
-    for (size_t i = 0; i < comps.size(); i++) {
-        comps[i].holeCount = countHolesForComponent(binary, width, height, comps[i]);
-        totalHoles += comps[i].holeCount;
+    for (size_t i = 0; i < components.size(); i++) {
+        components[i].numHole = countHole(binary, width, height, components[i]); //count holes per object
+        totalHoles += components[i].numHole;
 
-        string shapeType = classifyShape(comps[i]);
-        if (shapeType == "rectangle") {
+        //will classify if rectabgle or circle 
+        string typeShape = detectShape(components[i]);
+        if (typeShape == "rectangle") {
             rectangleCount++;
         } else {
             circleCount++;
         }
     }
 
-    cout << "Total number of holes: " << totalHoles << endl;
-    cout << "Total number of white objects: " << totalObjects << endl;
-    cout << "Total number of white rectangle objects: " << rectangleCount << endl;
-    cout << "Total number of white circle objects: " << circleCount << endl;
+    //Summary stats
+    cout << "Total number of holes: " << totalHoles   << endl;
+    cout << "Total number of white shapes: " << totalShape << endl;
+    cout << "Total number of white rectangles: " << rectangleCount << endl;
+    cout << "Total number of white circles: "<< circleCount  << endl;
 
-    cout << "\nPer-object details:\n";
-    for (size_t i = 0; i < comps.size(); i++) {
-        const int boxH = comps[i].maxRow - comps[i].minRow + 1;
-        const int boxW = comps[i].maxCol - comps[i].minCol + 1;
-        const double fillRatio = static_cast<double>(comps[i].area) /
-                                 (static_cast<double>(boxH) * boxW);
+    //Object-level details
+    cout << "\nPer bject details:\n";
+    for (size_t i = 0; i < components.size(); i++) {
+        int bh = components[i].maxR - components[i].minR + 1;
+        int bw = components[i].maxC - components[i].minC + 1;
+        double fillRatio = static_cast<double>(components[i].area) /
+                           (static_cast<double>(bh) * bw);
 
         cout << "Object " << (i + 1)
-             << ": area=" << comps[i].area
-             << ", bbox=(" << boxW << "x" << boxH << ")"
-             << ", holes=" << comps[i].holeCount
+             << ": area=" << components[i].area
+             << ", bbox=(" << bw << "x" << bh << ")"
+             << ", holes=" << components[i].numHole
              << ", fillRatio=" << fillRatio
-             << ", class=" << classifyShape(comps[i])
+             << ", class=" << detectShape(components[i])
              << endl;
     }
 
