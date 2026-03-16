@@ -78,7 +78,7 @@ static vector<uint8_t> toBinary(const vector<uint8_t>& image, int width, int hei
     //find max pixel value
     uint8_t fMax = 0;
     for (size_t i = 0; i < image.size(); i++) {
-        fMax = max(fMax, image[i]); //if pizel is large -> update 
+        fMax = max(fMax, image[i]); //if pizel is large -> update
     }
 
     double tVal = 0.5 * static_cast<double>(fMax); //half of max
@@ -86,11 +86,11 @@ static vector<uint8_t> toBinary(const vector<uint8_t>& image, int width, int hei
 
     for (int i = 0; i < width * height; i++) {
         //check if pixel is aboved our threshold val
-        bool above = image[i] > tVal;  
+        bool above = image[i] > tVal;
         if (above) {
             biOut[i] = 1;
         } else {
-            biOut[i] = 0; 
+            biOut[i] = 0;
         }
     }
     return biOut;
@@ -100,12 +100,16 @@ static vector<uint8_t> toBinary(const vector<uint8_t>& image, int width, int hei
 static inline uint8_t getBP(const vector<uint8_t>& image, int width, int height, int row, int col)
 {
     bool outside = row < 0 || row >= height || col < 0 || col >= width;
-    if (outside){
-        return 0 ; //return 0 for pixels outside image
+    if (outside) {
+        return 0; //return 0 for pixels outside image
     }
     uint8_t result = image[row * width + col];
     return result;
-    
+}
+
+//Function to see if pixel is inside bounds
+static inline bool inBounds(int row, int col, int width, int height) {
+    return row >= 0 && row < height && col >= 0 && col < width;
 }
 
 //Store info about each connected component
@@ -119,15 +123,10 @@ struct shapeInfo {
     int numHole;
 };
 
-//Function to see if pixel is inside bounds
-static inline bool inBounds(int row, int col, int width, int height) {
-    return row >= 0 && row < height && col >= 0 && col < width;
-}
-
-//Function that will label all connected compontnets 
+//Function that will label all connected compontnets
 static vector<shapeInfo> labelComp(const vector<uint8_t>& binary,
-                                             int width, int height,
-                                             vector<int>& labels)
+                                   int width, int height,
+                                   vector<int>& labels)
 {
     labels.assign(width * height, 0);
     vector<shapeInfo> comps;
@@ -160,8 +159,8 @@ static vector<shapeInfo> labelComp(const vector<uint8_t>& binary,
                 auto cur = q.front();
                 q.pop();
 
-                int r  = cur.first;
-                int c  = cur.second;
+                int r = cur.first;
+                int c = cur.second;
 
                 info.area++;
                 info.minR = min(info.minR, r);
@@ -186,98 +185,54 @@ static vector<shapeInfo> labelComp(const vector<uint8_t>& binary,
     return comps;
 }
 
-//Function to count black holes 
-static int countHole(const vector<uint8_t>& binary,
-                      int width, int height,
-                      const shapeInfo& comp)
+//Compute euler number using 2x2 quad patterns
+//euler = objects - holes
+static int eulerN(const vector<uint8_t>& binary, int width, int height)
 {
-    //get the coords of bound box
-    int r0 = max(0, comp.minR);
-    int r1 = min(height - 1, comp.maxR);
-    int c0 = max(0, comp.minC);
-    int c1 = min(width - 1, comp.maxC);
-    int bh = r1 - r0 + 1;
-    int bw = c1 - c0 + 1; 
+    //counters for the various patterns
+    int n1 = 0; //1 white pix
+    int n3 = 0;  //3 white pix
+    int nd = 0;  //daigonal pair
 
-    //xtract the sub image of components box
-    vector<uint8_t> sub(bh * bw, 0);
-    for (int r = r0; r <= r1; r++)
-        for (int c = c0; c <= c1; c++)
-            sub[(r - r0) * bw + (c - c0)] = binary[r * width + c];
+    for (int r = 0; r < height - 1; r++) {
+        for (int c = 0; c < width - 1; c++) {
+            //get 2x2 quad pixels
+            int tl = binary[r * width + c]; //top left
+            int tr = binary[r * width + c + 1];//top right
+            int bl = binary[(r+1) * width + c]; //bottom left
+            int br = binary[(r+1) * width + c + 1]; //bottom right
+            int sum = tl + tr + bl + br;
 
-    vector<int> vis(bh * bw, 0);
-    const int dr[4] = {-1, 1, 0, 0};
-    const int dc[4] = {0, 0, -1, 1};
+            bool isOne = (sum == 1); //1 white pixel
+            bool isThree = (sum == 3);  //3 white pixels
+            bool isDiags = (sum == 2) && ((tl == 1 && br == 1 && tr == 0 && bl == 0) ||  (tr == 1 && bl == 1 && tl == 0 && br == 0)); //diagonal pair
 
-    auto inSub = [&](int r, int c) {
-        return r >= 0 && r < bh && c >= 0 && c < bw;
-    };
-
-    //flood fill 
-    queue<pair<int,int>> q;
-    for (int r = 0; r < bh; r++) {
-        for (int c = 0; c < bw; c++) {
-            bool onBorder = (r == 0 || r == bh - 1 || c == 0 || c == bw - 1);
-            if (!onBorder) continue;
-            int idx = r * bw + c;
-            if (sub[idx] == 0 && vis[idx] == 0) {
-                vis[idx] = 1;
-                q.push({r, c});
-                while (!q.empty()) {
-                    auto cur = q.front(); q.pop();
-                    for (int k = 0; k < 4; k++) {
-                        int nr = cur.first  + dr[k];
-                        int nc = cur.second + dc[k];
-                        if (!inSub(nr, nc)) continue;
-                        int nid = nr * bw + nc;
-                        if (sub[nid] == 0 && vis[nid] == 0) {
-                            vis[nid] = 1;
-                            q.push({nr, nc});
-                        }
-                    }
-                }
+            //update counts on pattern found                       
+            if (isOne){
+                n1++;
             }
+            if (isThree){
+                n3++;
+            }   
+            if (isDiags) {
+               nd++; 
+            } 
         }
     }
-
-    //consider any univisited black pixedl as hole
-    int holes = 0;
-    for (int r = 0; r < bh; r++) {
-        for (int c = 0; c < bw; c++) {
-            int idx = r * bw + c;
-            if (sub[idx] == 0 && vis[idx] == 0) {
-                //HOLE FOUNDDDDDD
-                holes++;
-                vis[idx] = 1;
-                q.push({r, c});
-                while (!q.empty()) {
-                    auto cur = q.front(); q.pop();
-                    for (int k = 0; k < 4; k++) {
-                        int nr = cur.first  + dr[k];
-                        int nc = cur.second + dc[k];
-                        if (!inSub(nr, nc)) continue;
-                        int nid = nr * bw + nc;
-                        if (sub[nid] == 0 && vis[nid] == 0) {
-                            vis[nid] = 1;
-                            q.push({nr, nc});
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return holes;
+    // formula for 4Connect
+    int val = (n1 - n3 + 2*nd) / 4;
+    return val;
 }
 
-//Classify shape as rectangle or circle using fill ratio
+//Function to classify shape as rectangle or circle using fill ratio
 static string detectShape(const shapeInfo& comp)
 {
-    int bh = comp.maxR - comp.minR + 1; 
+    int bh = comp.maxR - comp.minR + 1;
     int bw = comp.maxC - comp.minC + 1;
     double boxArea   = static_cast<double>(bh) * static_cast<double>(bw);
-    double fillRatio = static_cast<double>(comp.area) / boxArea; 
+    double fillRatio = static_cast<double>(comp.area) / boxArea;
 
-    //rects shuld have rastio close to 1, circle will have less 
+    //rects shuld have rastio close to 1, circle will have less
     bool isRect = fillRatio > 0.82;
     if (isRect) {
         return "rectangle";
@@ -296,10 +251,10 @@ int main(int argc, char* argv[])
     }
 
     //parse input args
-    string input = argv[1];
+    string input  = argv[1];
     string output = argv[2];
     int width = atoi(argv[3]);
-    int height = atoi(argv[4]);
+    int height= atoi(argv[4]);
 
     if (width <= 0 || height <= 0) {
         cerr << "Error: width and height must be positive." << endl;
@@ -316,16 +271,19 @@ int main(int argc, char* argv[])
     vector<int> labels;
     vector<shapeInfo> components = labelComp(binary, width, height, labels);
 
-    int totalShape  = static_cast<int>(components.size());
-    int totalHoles = 0;
+    int totalShape = static_cast<int>(components.size()); //object count from connected components
+
+    //compute euler Num
+    int euler = eulerN(binary, width, height);
+
+    //holes = objects - euler value
+    int totalHoles = totalShape - euler;
+
     int rectangleCount = 0;
     int circleCount = 0;
 
     for (size_t i = 0; i < components.size(); i++) {
-        components[i].numHole = countHole(binary, width, height, components[i]); //count holes per object
-        totalHoles += components[i].numHole;
-
-        //will classify if rectabgle or circle 
+        //will classify if rectabgle or circle
         string typeShape = detectShape(components[i]);
         if (typeShape == "rectangle") {
             rectangleCount++;
@@ -335,10 +293,10 @@ int main(int argc, char* argv[])
     }
 
     //Summary stats
-    cout << "Total number of holes: " << totalHoles   << endl;
-    cout << "Total number of white shapes: " << totalShape << endl;
-    cout << "Total number of white rectangles: " << rectangleCount << endl;
-    cout << "Total number of white circles: "<< circleCount  << endl;
+    cout << "Total number of holes: " << totalHoles << endl;
+    cout << "Total number of white shapes: "  << totalShape << endl;
+    cout << "Total number of white rectangles: "  << rectangleCount << endl;
+    cout << "Total number of white circles: " << circleCount << endl;
 
     //Object-level details
     cout << "\nPer bject details:\n";
@@ -353,7 +311,7 @@ int main(int argc, char* argv[])
              << ", bbox=(" << bw << "x" << bh << ")"
              << ", holes=" << components[i].numHole
              << ", fillRatio=" << fillRatio
-             << ", class=" << detectShape(components[i])
+             << ", class="<< detectShape(components[i])
              << endl;
     }
 
