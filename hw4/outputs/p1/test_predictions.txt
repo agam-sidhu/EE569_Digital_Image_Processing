@@ -1,0 +1,13 @@
+filename,true_label,predicted_label,mahalanobis_distance
+1.raw,grass,grass,0.1947589646
+10.raw,brick,stones,0.1413392671
+11.raw,blanket,grass,2.1684579844
+12.raw,grass,grass,0.1738531776
+2.raw,blanket,blanket,0.1983480336
+3.raw,blanket,blanket,0.1173691067
+4.raw,stones,stones,0.7741157462
+5.raw,stones,stones,0.2218458741
+6.raw,grass,grass,0.1508350924
+7.raw,brick,stones,0.9588214046
+8.raw,stones,stones,0.6085663746
+9.raw,brick,brick,0.3781588797

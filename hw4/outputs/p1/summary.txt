@@ -1,0 +1,16 @@
+EE569 HW4 Problem 1(a) Summary
+----------------------------------------
+Training samples: 36
+Testing samples: 12
+
+Most discriminative feature (Fisher score): L5E5  score = 1.29944
+Least discriminative feature (Fisher score): W5L5  score = 0.0194334
+
+Top 3 PCA eigenvalues:
+PC1: 18.1184  explained ratio = 0.704606
+PC2: 3.94641  explained ratio = 0.153472
+PC3: 1.49134  explained ratio = 0.0579965
+
+Nearest neighbor classification using Mahalanobis distance in 3D PCA space
+Test errors: 3 / 12
+Test error rate: 0.25
