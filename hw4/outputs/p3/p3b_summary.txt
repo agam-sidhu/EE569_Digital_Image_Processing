@@ -1,0 +1,30 @@
+Problem 3(b) Matching Summary
+----------------------------------------
+Largest-scale keypoint in Cat_1
+Cat_1: x = 159.8728, y = 109.7060, size = 81.4057, angle = 343.6034
+Closest point in Cat_3: x = 207.6632, y = 214.4036, size = 2.5889, angle = 74.0380, descriptor distance = 366.4887
+
+Cat_1 vs Cat_3
+Left keypoints: 942
+Right keypoints: 287
+Ratio-test matches: 10
+Best match distance: 209.1052
+
+Cat_3 vs Cat_2
+Left keypoints: 287
+Right keypoints: 548
+Ratio-test matches: 2
+Best match distance: 240.6657
+
+Dog_1 vs Cat_3
+Left keypoints: 321
+Right keypoints: 287
+Ratio-test matches: 6
+Best match distance: 184.1548
+
+Cat_1 vs Dog_1
+Left keypoints: 942
+Right keypoints: 321
+Ratio-test matches: 2
+Best match distance: 180.1055
+

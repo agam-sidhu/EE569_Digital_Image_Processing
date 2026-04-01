@@ -1,0 +1,18 @@
+Problem 3(a) SIFT Summary
+----------------------------------------
+Cat_1
+Keypoint count: 942
+Largest keypoint: x = 159.8728, y = 109.7060, size = 81.4057, angle = 343.6034
+
+Cat_2
+Keypoint count: 548
+Largest keypoint: x = 406.4403, y = 145.5451, size = 60.2713, angle = 138.9955
+
+Cat_3
+Keypoint count: 287
+Largest keypoint: x = 103.8330, y = 157.5163, size = 79.3817, angle = 68.7591
+
+Dog_1
+Keypoint count: 321
+Largest keypoint: x = 429.4129, y = 329.9783, size = 48.9049, angle = 188.5788
+

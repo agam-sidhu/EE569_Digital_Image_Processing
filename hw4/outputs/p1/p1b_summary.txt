@@ -1,0 +1,17 @@
+Problem 1(b) Summary
+----------------------------------------
+Unsupervised K-means on 25-D test features
+Errors: 4
+Error rate: 0.333333
+
+Unsupervised K-means on 3-D PCA test features
+Errors: 3
+Error rate: 0.25
+
+Supervised one-vs-rest linear SVM on 25-D features
+Errors: 2
+Error rate: 0.166667
+
+Supervised one-vs-rest linear SVM on 3-D PCA features
+Errors: 6
+Error rate: 0.5

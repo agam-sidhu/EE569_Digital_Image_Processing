@@ -1,0 +1,5 @@
+Problem 3(c) Bag of Words Comparison
+----------------------------------------
+Cat_3 vs Cat_1: 0.1168116392
+Cat_3 vs Cat_2: 0.1493122916
+Cat_3 vs Dog_1: 0.1743367249

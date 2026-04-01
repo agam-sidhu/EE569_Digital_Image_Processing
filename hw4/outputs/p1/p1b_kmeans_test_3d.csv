@@ -1,0 +1,13 @@
+filename,true_label,cluster_id,cluster_majority_label,predicted_label
+1.raw,grass,0,grass,grass
+10.raw,brick,1,blanket,blanket
+11.raw,blanket,1,blanket,blanket
+12.raw,grass,0,grass,grass
+2.raw,blanket,0,grass,grass
+3.raw,blanket,1,blanket,blanket
+4.raw,stones,2,stones,stones
+5.raw,stones,2,stones,stones
+6.raw,grass,0,grass,grass
+7.raw,brick,3,brick,brick
+8.raw,stones,2,stones,stones
+9.raw,brick,1,blanket,blanket

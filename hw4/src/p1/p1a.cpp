@@ -525,9 +525,12 @@ static void jacobDecomp(const vector< vector<double> >& input,
         }
 
         //updates our diagonal elements
-        double ppNew = cosVal * cosVal * matpp - 2.0 * sinVal * cosVal * matpq + sinVal * sinVal * matqq;
-        double qqNew = sinVal * sinVal * matpp + 2.0 * sinVal * cosVal * matpq + cosVal * cosVal * matqq;
-
+        double s2 = sinVal * sinVal;
+        double c2 = cosVal * cosVal;
+        double sc = sinVal * cosVal;
+        double ppNew = c2 * matpp - 2.0 * sc * matpq + s2 * matqq;
+        double qqNew = s2 * matpp + 2.0 * sc * matpq + c2 * matqq;
+        
         mat[p][p] = ppNew;
         mat[q][q] = qqNew;
         mat[p][q] = 0.0;
@@ -549,191 +552,216 @@ static void jacobDecomp(const vector< vector<double> >& input,
     }
 }
 
-//Sort eigenpairs descending
-static void sortEigenPairsDescending(vector<double>& eigenvalues,
-                                     vector< vector<double> >& eigenvectors)
+//Operation to sort eignevalues (in descending order) and reorder them
+static void sortEigen(vector<double>& eVals, vector< vector<double> >& eVecs)
 {
-    int n = static_cast<int>(eigenvalues.size());
-    vector<int> indices(n);
-    for (int i = 0; i < n; i++) {
-        indices[i] = i;
+    
+    int dNum = static_cast<int>(eVals.size());
+    vector<int> idxs(dNum);
+    vector<double> sortVals(dNum, 0.0);
+    for (int newIdx = 0; newIdx < dNum; newIdx++) {
+        idxs[newIdx] = newIdx;
     }
 
-    sort(indices.begin(), indices.end(),
-         [&](int a, int b) { return eigenvalues[a] > eigenvalues[b]; });
+    sort(idxs.begin(), idxs.end(),
+         [&](int idxA, int idxB) {
+            return eVals[idxA] > eVals[idxB];
+    });
+    vector< vector<double> > sortVecs(dNum, vector<double>(dNum, 0.0));
 
-    vector<double> sortedValues(n, 0.0);
-    vector< vector<double> > sortedVectors(n, vector<double>(n, 0.0));
-
-    for (int i = 0; i < n; i++) {
-        sortedValues[i] = eigenvalues[indices[i]];
-        for (int r = 0; r < n; r++) {
-            sortedVectors[r][i] = eigenvectors[r][indices[i]];
+    //reorders eignevals & eigenvecs 
+    for (int i = 0; i < dNum; i++) {
+        sortVals[i] = eVals[idxs[i]];
+        for (int r = 0; r < dNum; r++) {
+            sortVecs[r][i] = eVecs[r][idxs[i]];
         }
     }
-
-    eigenvalues = sortedValues;
-    eigenvectors = sortedVectors;
+    //stores the sorted vals
+    eVals = sortVals;
+    eVecs = sortVecs;
 }
 
-//Project data using first k eigenvectors
-static vector< vector<double> > projectDataPCA(const vector< vector<double> >& data,
-                                               const vector< vector<double> >& eigenvectors,
+//Function to project the data on the first k principal components
+static vector< vector<double> > projectsPCA(const vector< vector<double> >& data,
+                                               const vector< vector<double> >& eVecs,
                                                int k)
 {
-    int n = static_cast<int>(data.size());
-    int dim = static_cast<int>(data[0].size());
+    int nSamples = static_cast<int>(data.size());
+    int dimNum = static_cast<int>(data[0].size());
+    //intialize the data matrix
+    vector< vector<double> > dataMat(nSamples, vector<double>(k, 0.0));
 
-    vector< vector<double> > projected(n, vector<double>(k, 0.0));
-
-    for (int i = 0; i < n; i++) {
+    //Project the samples on to PC
+    for (int idx = 0; idx < nSamples; idx++) {
         for (int pc = 0; pc < k; pc++) {
-            double sum = 0.0;
-            for (int d = 0; d < dim; d++) {
-                sum += data[i][d] * eigenvectors[d][pc];
+            double val = 0.0;
+            //calculates the dot product between the eVec and sample
+            for (int dimIdx = 0; dimIdx < dimNum; dimIdx++) {
+                val += data[idx][dimIdx] * eVecs[dimIdx][pc];
             }
-            projected[i][pc] = sum;
+            dataMat[idx][pc] = val;
         }
     }
-
-    return projected;
+    return dataMat;
 }
 
-//3x3 matrix inverse
-static bool invert3x3(const vector< vector<double> >& A,
-                      vector< vector<double> >& invA)
+//Function to get inverse of 3x3 matrix (sets false if not 3x3 or singular)
+static bool invertMat(const vector< vector<double> >& mat,
+                      vector< vector<double> >& invMat)
 {
-    if (A.size() != 3 || A[0].size() != 3) {
+    //Makes sure that we have 3x3 matrix
+    if (mat.size() != 3 || mat[0].size() != 3) {
         return false;
     }
 
-    double a = A[0][0], b = A[0][1], c = A[0][2];
-    double d = A[1][0], e = A[1][1], f = A[1][2];
-    double g = A[2][0], h = A[2][1], i = A[2][2];
+    //Gets trhe matrix elements
+    double a = mat[0][0];
+    double b = mat[0][1];
+    double c = mat[0][2];
+    double d = mat[1][0];
+    double e = mat[1][1];
+    double f = mat[1][2];
+    double g = mat[2][0];
+    double h = mat[2][1];
+    double i = mat[2][2];
 
-    double det = a * (e * i - f * h)
-               - b * (d * i - f * g)
-               + c * (d * h - e * g);
+    //calculates determinant
+    double upper = e * i - f * h;
+    double mid = d * i - f * g;
+    double lower = d * h - e * g;
+    double det = a * upper - b * mid + c * lower;
 
+    //Matrix = singular if our determinant is close to zero -> false
     if (fabs(det) < 1e-12) {
         return false;
     }
 
-    invA.assign(3, vector<double>(3, 0.0));
-
-    invA[0][0] =  (e * i - f * h) / det;
-    invA[0][1] = -(b * i - c * h) / det;
-    invA[0][2] =  (b * f - c * e) / det;
-
-    invA[1][0] = -(d * i - f * g) / det;
-    invA[1][1] =  (a * i - c * g) / det;
-    invA[1][2] = -(a * f - c * d) / det;
-
-    invA[2][0] =  (d * h - e * g) / det;
-    invA[2][1] = -(a * h - b * g) / det;
-    invA[2][2] =  (a * e - b * d) / det;
+    //calculates the inv by adjuate/determinant
+    invMat.assign(3, vector<double>(3, 0.0));
+    invMat[0][0] = upper / det;
+    invMat[0][1] = -(b * i - c * h) / det;
+    invMat[0][2] = (b * f - c * e) / det;
+    invMat[1][0] = -(mid) / det;
+    invMat[1][1] = (a * i - c * g) / det;
+    invMat[1][2] = -(a * f - c * d) / det;
+    invMat[2][0] = (lower) / det;
+    invMat[2][1] = -(a * h - b * g) / det;
+    invMat[2][2] = (a * e - b * d) / det;
 
     return true;
 }
 
-//Mahalanobis distance in 3D
-static double mahalanobisDistance3D(const vector<double>& x,
+//This function will calculate the Mahalanobis distance 
+static double calcMahaDist(const vector<double>& x,
                                     const vector<double>& y,
-                                    const vector< vector<double> >& invCov)
+                                    const vector< vector<double> >& icMatrix)
 {
+    //calculates the difference between vector x &y
     vector<double> diff(3, 0.0);
-    for (int k = 0; k < 3; k++) {
-        diff[k] = x[k] - y[k];
+    for (int i = 0; i < 3; i++) {
+        diff[i] = x[i] - y[i];
     }
-
-    double temp[3] = {0.0, 0.0, 0.0};
+    //multiplies the inverse covar matrix with the difference vector
+    double result[3] = {0.0, 0.0, 0.0};
     for (int r = 0; r < 3; r++) {
         for (int c = 0; c < 3; c++) {
-            temp[r] += invCov[r][c] * diff[c];
+            result[r] += icMatrix[r][c] * diff[c];
         }
     }
 
-    double dist2 = 0.0;
+    //calculates the dot product from the result of matrix & diff vector 
+    double sqaured = 0.0;
     for (int k = 0; k < 3; k++) {
-        dist2 += diff[k] * temp[k];
+        sqaured += diff[k] * result[k];
     }
 
-    if (dist2 < 0.0) {
-        dist2 = 0.0;
+    //to prvent negative values
+    if (sqaured < 0.0) {
+        sqaured = 0.0;
     }
-    return sqrt(dist2);
+    return sqrt(sqaured);
 }
 
 //Compute discriminative score for each feature using Fisher style score
-static vector<double> computeFeatureDiscriminantScores(const vector< vector<double> >& trainFeatures,
+static vector<double> calcFDScore(const vector< vector<double> >& trainFeatures,
                                                        const vector<string>& trainLabels)
 {
-    int dim = static_cast<int>(trainFeatures[0].size());
-    vector<double> globalMean = computeMeanVector(trainFeatures);
+    int featDim = static_cast<int>(trainFeatures[0].size()); //#of feature dims
+    vector<double> total = calcMeanVec(trainFeatures); // Total "global" mean vector across all samples
 
-    map<string, vector<int> > classIndices;
-    for (size_t i = 0; i < trainLabels.size(); i++) {
-        classIndices[trainLabels[i]].push_back(static_cast<int>(i));
+    //this groups sample idx by their class label
+    map<string, vector<int> > classIdx;
+    for (size_t idx = 0; idx < trainLabels.size(); idx++) {
+        classIdx[trainLabels[idx]].push_back(static_cast<int>(idx));
     }
 
-    vector<double> scores(dim, 0.0);
+    vector<double> featScore(featDim, 0.0);
 
-    for (int d = 0; d < dim; d++) {
-        double between = 0.0;
-        double within = 0.0;
+    //evaluates 1 feature dim 
+    for (int d = 0; d < featDim; d++) {
+        double betweenClass = 0.0;
+        double inClass = 0.0;
 
-        for (map<string, vector<int> >::iterator it = classIndices.begin(); it != classIndices.end(); ++it) {
+        //go through each class 
+        for (map<string, vector<int> >::iterator it = classIdx.begin(); it != classIdx.end(); ++it) {
             const vector<int>& idxs = it->second;
             double mean = 0.0;
 
+            //calculates the mean for current class & feature dim 
             for (size_t k = 0; k < idxs.size(); k++) {
                 mean += trainFeatures[idxs[k]][d];
             }
+            //takes # of samples so we can get mean
             mean /= static_cast<double>(idxs.size());
 
+            //get the inclass variance
             for (size_t k = 0; k < idxs.size(); k++) {
-                double diff = trainFeatures[idxs[k]][d] - mean;
-                within += diff * diff;
+                double dev = trainFeatures[idxs[k]][d] - mean;
+                inClass += dev * dev;
             }
 
-            double diffMean = mean - globalMean[d];
-            between += static_cast<double>(idxs.size()) * diffMean * diffMean;
+            //get the between class variance
+            double devMean = mean - total[d];
+            betweenClass += static_cast<double>(idxs.size()) * devMean * devMean;
         }
 
-        scores[d] = between / (within + 1e-12);
+        //fisher score = between class / in class
+        featScore[d] = betweenClass / (inClass + 1e-12);
     }
 
-    return scores;
+    return featScore;
 }
-
-static map<string, string> loadTestLabelMap(const string& filename)
+//FUnction to load test labels
+static map<string, string> loadTestLabels(const string& filename)
 {
-    map<string, string> labelMap;
+    map<string, string> label;
     ifstream file(filename.c_str());
 
+    //in case we have empty file
     if (!file) {
-        return labelMap;
+        return label;
     }
 
-    string indexToken;
-    string label;
+    string idxToken;
+    string classLabel;
 
-    while (file >> indexToken >> label) {
-        if (!indexToken.empty() && indexToken[indexToken.size() - 1] == '.') {
-            indexToken.pop_back();
+    while (file >> idxToken >> classLabel) {
+        if (!idxToken.empty() && idxToken[idxToken.size() - 1] == '.') {
+            idxToken.pop_back();
         }
 
-        string key = indexToken + ".raw";
-        labelMap[key] = toLowercase(label);
+        //takes index into raw filename 
+        string key = idxToken + ".raw";
+        label[key] = toLowercase(classLabel);
     }
 
     file.close();
-    return labelMap;
+    return label;
 }
-//Write features to CSV
-static void writeFeaturesCSV(const string& filename,
-                             const vector<string>& filepaths,
-                             const vector<string>& labels,
+//function to write the features to csv
+static void writeFCSV(const string& filename,
+                             const vector<string>& path,
+                             const vector<string>& label,
                              const vector< vector<double> >& features,
                              const vector<string>& featureNames)
 {
@@ -749,8 +777,9 @@ static void writeFeaturesCSV(const string& filename,
     }
     file << "\n";
 
+    //goes through each sample + writes name, label, & feature vals ->csv
     for (size_t i = 0; i < features.size(); i++) {
-        file << getFile(filepaths[i]) << "," << labels[i];
+        file << getFile(path[i]) << "," << label[i];
         for (size_t d = 0; d < features[i].size(); d++) {
             file << "," << fixed << setprecision(10) << features[i][d];
         }
@@ -760,12 +789,13 @@ static void writeFeaturesCSV(const string& filename,
     file.close();
 }
 
-//Write PCA points to CSV
-static void writePCA3DCSV(const string& filename,
-                          const vector<string>& filepaths,
+//Function to project PCA results into csv
+static void writePCA(const string& filename,
+                          const vector<string>& path,
                           const vector<string>& labels,
-                          const vector< vector<double> >& projected)
+                          const vector< vector<double> >& proj)
 {
+    //writes label filename + pc vals into csv
     ofstream file(filename.c_str());
     if (!file) {
         cerr << "Error: cannot open CSV file " << filename << endl;
@@ -773,77 +803,81 @@ static void writePCA3DCSV(const string& filename,
     }
 
     file << "filename,label,pc1,pc2,pc3\n";
-    for (size_t i = 0; i < projected.size(); i++) {
-        file << getFile(filepaths[i]) << "," << labels[i]
-             << "," << fixed << setprecision(10) << projected[i][0]
-             << "," << fixed << setprecision(10) << projected[i][1]
-             << "," << fixed << setprecision(10) << projected[i][2] << "\n";
+    for (size_t i = 0; i < proj.size(); i++) {
+        file << getFile(path[i]) << "," << labels[i]
+             << "," << fixed << setprecision(10) << proj[i][0]
+             << "," << fixed << setprecision(10) << proj[i][1]
+             << "," << fixed << setprecision(10) << proj[i][2] << "\n";
     }
     file.close();
 }
 
 //Write text summary
-static void writeSummary(const string& filename,
-                         const vector<string>& filterNames,
-                         const vector<double>& fisherScores,
-                         const vector<double>& eigenvalues,
-                         int numTrain,
-                         int numTest,
-                         bool hasGroundTruth,
+static void summarize(const string& output,
+                         const vector<string>& filter,
+                         const vector<double>& fScore,
+                         const vector<double>& eVals,
+                         int trainSamples,
+                         int testSamples,
+                         bool hasGT,
                          int numErrors,
-                         double errorRate)
+                         double testError)
 {
-    ofstream file(filename.c_str());
+
+    ofstream file(output.c_str());
     if (!file) {
-        cerr << "Error: cannot open summary file " << filename << endl;
+        cerr << "Error: cannot open summary file " << output << endl;
         exit(1);
     }
 
-    int bestIdx = 0;
-    int worstIdx = 0;
-    for (size_t i = 1; i < fisherScores.size(); i++) {
-        if (fisherScores[i] > fisherScores[bestIdx]) {
+    //finds best & worst feature 
+    int bestIdx = 0, worstIdx = 0;
+    for (size_t i = 1; i < fScore.size(); i++) {
+        if (fScore[i] > fScore[bestIdx]) {
             bestIdx = static_cast<int>(i);
         }
-        if (fisherScores[i] < fisherScores[worstIdx]) {
+        if (fScore[i] < fScore[worstIdx]) {
             worstIdx = static_cast<int>(i);
         }
     }
 
-    double eigSum = 0.0;
-    for (size_t i = 0; i < eigenvalues.size(); i++) {
-        if (eigenvalues[i] > 0.0) {
-            eigSum += eigenvalues[i];
+    //gets sum of positive eigenvalues
+    double eSum = 0.0;
+    for (size_t i = 0; i < eVals.size(); i++) {
+        if (eVals[i] > 0.0) {
+            eSum += eVals[i];
         }
     }
 
-    double pc1ratio = (eigSum > 0.0) ? eigenvalues[0] / eigSum : 0.0;
-    double pc2ratio = (eigSum > 0.0) ? eigenvalues[1] / eigSum : 0.0;
-    double pc3ratio = (eigSum > 0.0) ? eigenvalues[2] / eigSum : 0.0;
+    //calculates the variance ratio for the 3 top PCw
+    double pc1 = (eSum > 0.0) ? eVals[0] / eSum : 0.0;
+    double pc2 = (eSum > 0.0) ? eVals[1] / eSum : 0.0;
+    double pc3 = (eSum > 0.0) ? eVals[2] / eSum : 0.0;
 
-    file << "EE569 HW4 Problem 1(a) Summary\n";
+    //writes summary of results into file
+    file << "Problem 1(a) Summary\n";
     file << "----------------------------------------\n";
-    file << "Training samples: " << numTrain << "\n";
-    file << "Testing samples: " << numTest << "\n\n";
+    file << "Training samples: " << trainSamples << "\n";
+    file << "Testing samples: " << testSamples << "\n\n";
 
-    file << "Most discriminative feature (Fisher score): "
-         << filterNames[bestIdx] << "  score = " << fisherScores[bestIdx] << "\n";
+    file << "Most discriminative feature: "
+         << filter[bestIdx] << "  score = " << fScore[bestIdx] << "\n";
     file << "Least discriminative feature (Fisher score): "
-         << filterNames[worstIdx] << "  score = " << fisherScores[worstIdx] << "\n\n";
+         << filter[worstIdx] << "  score = " << fScore[worstIdx] << "\n\n";
 
-    file << "Top 3 PCA eigenvalues:\n";
-    file << "PC1: " << eigenvalues[0] << "  explained ratio = " << pc1ratio << "\n";
-    file << "PC2: " << eigenvalues[1] << "  explained ratio = " << pc2ratio << "\n";
-    file << "PC3: " << eigenvalues[2] << "  explained ratio = " << pc3ratio << "\n\n";
+    file << "Top 3 PCA EignValues:\n";
+    file << "PC1: " << eVals[0] << "  explained ratio = " << pc1 << "\n";
+    file << "PC2: " << eVals[1] << "  explained ratio = " << pc2 << "\n";
+    file << "PC3: " << eVals[2] << "  explained ratio = " << pc3 << "\n\n";
 
     file << "Nearest neighbor classification using Mahalanobis distance in 3D PCA space\n";
 
-    if (hasGroundTruth) {
-        file << "Test errors: " << numErrors << " / " << numTest << "\n";
-        file << "Test error rate: " << errorRate << "\n";
+    if (hasGT) {
+        file << "Test errors: " << numErrors << " / " << testSamples << "\n";
+        file << "Test error rate: " << testError << "\n";
     } else {
-        file << "Test ground truth labels were not provided.\n";
-        file << "Therefore, only predicted categories are reported for the testing images.\n";
+        file << "Test Ground Truth was not provided.\n";
+        file << "Only predicted categories are reported for the testing images.\n";
         file << "No numerical test error rate is reported.\n";
     }
 
@@ -868,7 +902,7 @@ int main(int argc, char* argv[])
     const int width = 128;
     const int height = 128;
 
-
+    //Get training and testing file lists
     vector<string> trainFiles = listRF(trainDir);
     vector<string> testFiles = listRF(testDir);
 
@@ -884,7 +918,8 @@ int main(int argc, char* argv[])
     cout << "Found " << trainFiles.size() << " training files." << endl;
     cout << "Found " << testFiles.size() << " testing files." << endl;
 
-    map<string, string> testLabelMap = loadTestLabelMap(testLabelMapFile);
+    //Load optional test ground-truth labels
+    map<string, string> testLabelMap = loadTestLabels(testLabelMapFile);
     bool hasGroundTruth = !testLabelMap.empty();
 
     if (hasGroundTruth) {
@@ -893,9 +928,10 @@ int main(int argc, char* argv[])
         cout << "No test label map found. Test labels will be treated as unknown." << endl;
     }
 
+    //Generate the 25 Laws filters
     vector< vector< vector<double> > > filters;
     vector<string> filterNames;
-    buildLawsFilters(filters, filterNames);
+    genLFs(filters, filterNames);
 
     vector< vector<double> > trainFeatures;
     vector< vector<double> > testFeatures;
@@ -906,7 +942,7 @@ int main(int argc, char* argv[])
     for (size_t i = 0; i < trainFiles.size(); i++) {
         vector<double> image;
         readGray(trainFiles[i], image, width, height);
-        vector<double> features = extractLawsFeatures(image, width, height, filters);
+        vector<double> features = extractLFs(image, width, height, filters);
 
         string label = extractLabel(trainFiles[i]);
 
@@ -920,14 +956,14 @@ int main(int argc, char* argv[])
     //Extract testing features
     for (size_t i = 0; i < testFiles.size(); i++) {
         vector<double> image;
-        readGrayImageDouble(testFiles[i], image, width, height);
-        vector<double> features = extractLawsFeatures(image, width, height, filters);
+        readGray(testFiles[i], image, width, height);
+        vector<double> features = extractLFs(image, width, height, filters);
 
-        string base = getFile(testFiles[i]);
+        string baseName = getFile(testFiles[i]);
         string label = "unknown";
 
         if (hasGroundTruth) {
-            map<string, string>::iterator it = testLabelMap.find(base);
+            map<string, string>::iterator it = testLabelMap.find(baseName);
             if (it != testLabelMap.end()) {
                 label = it->second;
             }
@@ -938,52 +974,58 @@ int main(int argc, char* argv[])
         testFeatures.push_back(features);
         testLabels.push_back(label);
 
-        cout << "Processed test:  " << base
+        cout << "Processed test:  " << baseName
              << "  label = " << label << endl;
     }
 
-    //Save raw 25D features first
-    writeFeaturesCSV(outputDir + "/train_features_25d.csv", trainFiles, trainLabels, trainFeatures, filterNames);
-    writeFeaturesCSV(outputDir + "/test_features_25d.csv", testFiles, testLabels, testFeatures, filterNames);
+    //Write raw 25D feature vectors
+    writeFCSV(outputDir + "/train_features_25d.csv",
+              trainFiles, trainLabels, trainFeatures, filterNames);
 
-    //Discriminative score on raw train features
-    vector<double> fisherScores = computeFeatureDiscriminantScores(trainFeatures, trainLabels);
+    writeFCSV(outputDir + "/test_features_25d.csv",
+              testFiles, testLabels, testFeatures, filterNames);
 
-    //Normalize using training statistics
-    vector<double> trainMean = computeMeanVector(trainFeatures);
-    vector<double> trainStd = computeStdVec(trainFeatures, trainMean);
+    //Compute Fisher discriminant scores on raw training features
+    vector<double> fisherScores = calcFDScore(trainFeatures, trainLabels);
+
+    //Normalize features using training statistics
+    vector<double> trainMean = calcMeanVec(trainFeatures);
+    vector<double> trainStd = calcStdVec(trainFeatures, trainMean);
 
     vector< vector<double> > trainFeaturesNorm = trainFeatures;
     vector< vector<double> > testFeaturesNorm = testFeatures;
-    normalizeData(trainFeaturesNorm, trainMean, trainStd);
-    normalizeData(testFeaturesNorm, trainMean, trainStd);
 
-    //PCA using training set only
-    vector< vector<double> > cov = computeCovariance(trainFeaturesNorm);
+    normData(trainFeaturesNorm, trainMean, trainStd);
+    normData(testFeaturesNorm, trainMean, trainStd);
+
+    //PCA using normalized training features
+    vector< vector<double> > covMat = calcCovar(trainFeaturesNorm);
     vector<double> eigenvalues;
     vector< vector<double> > eigenvectors;
-    jacobiEigenDecomposition(cov, eigenvalues, eigenvectors);
-    sortEigenPairsDescending(eigenvalues, eigenvectors);
 
-    vector< vector<double> > trainPCA = projectDataPCA(trainFeaturesNorm, eigenvectors, 3);
-    vector< vector<double> > testPCA = projectDataPCA(testFeaturesNorm, eigenvectors, 3);
+    jacobDecomp(covMat, eigenvalues, eigenvectors);
+    sortEigen(eigenvalues, eigenvectors);
 
-    writePCA3DCSV(outputDir + "/train_pca_3d.csv", trainFiles, trainLabels, trainPCA);
-    writePCA3DCSV(outputDir + "/test_pca_3d.csv", testFiles, testLabels, testPCA);
+    vector< vector<double> > trainPCA = projectsPCA(trainFeaturesNorm, eigenvectors, 3);
+    vector< vector<double> > testPCA = projectsPCA(testFeaturesNorm, eigenvectors, 3);
 
-    //Covariance in projected 3D train space for Mahalanobis metric
-    vector< vector<double> > cov3 = computeCovariance(trainPCA);
+    //Write 3D PCA results
+    writePCA(outputDir + "/train_pca_3d.csv", trainFiles, trainLabels, trainPCA);
+    writePCA(outputDir + "/test_pca_3d.csv", testFiles, testLabels, testPCA);
+
+    //Compute covariance in 3D PCA space for Mahalanobis distance
+    vector< vector<double> > cov3 = calcCovar(trainPCA);
     for (int d = 0; d < 3; d++) {
         cov3[d][d] += 1e-6;
     }
 
     vector< vector<double> > invCov3;
-    if (!invert3x3(cov3, invCov3)) {
+    if (!invertMat(cov3, invCov3)) {
         cerr << "Error: failed to invert 3x3 covariance matrix for Mahalanobis distance." << endl;
         return 1;
     }
 
-    //Nearest neighbor classification
+    //Nearest-neighbor classification
     int numErrors = 0;
     int numEvaluated = 0;
 
@@ -997,29 +1039,29 @@ int main(int argc, char* argv[])
 
     for (size_t i = 0; i < testPCA.size(); i++) {
         double bestDist = numeric_limits<double>::max();
-        int bestIdx = -1;
+        int bestTrainIdx = -1;
 
         for (size_t j = 0; j < trainPCA.size(); j++) {
-            double dist = mahalanobisDistance3D(testPCA[i], trainPCA[j], invCov3);
+            double dist = calcMahaDist(testPCA[i], trainPCA[j], invCov3);
             if (dist < bestDist) {
                 bestDist = dist;
-                bestIdx = static_cast<int>(j);
+                bestTrainIdx = static_cast<int>(j);
             }
         }
 
-        string predicted = trainLabels[bestIdx];
-        string truth = testLabels[i];
+        string predictedLabel = trainLabels[bestTrainIdx];
+        string trueLabel = testLabels[i];
 
-        if (truth != "unknown") {
+        if (trueLabel != "unknown") {
             numEvaluated++;
-            if (predicted != truth) {
+            if (predictedLabel != trueLabel) {
                 numErrors++;
             }
         }
 
         predFile << getFile(testFiles[i]) << ","
-                 << truth << ","
-                 << predicted << ","
+                 << trueLabel << ","
+                 << predictedLabel << ","
                  << fixed << setprecision(10) << bestDist << "\n";
     }
 
@@ -1031,19 +1073,21 @@ int main(int argc, char* argv[])
         errorRate = static_cast<double>(numErrors) / static_cast<double>(numEvaluated);
     }
 
-    writeSummary(outputDir + "/summary.txt",
-                 filterNames,
-                 fisherScores,
-                 eigenvalues,
-                 static_cast<int>(trainFiles.size()),
-                 static_cast<int>(testFiles.size()),
-                 canReportError,
-                 numErrors,
-                 errorRate);
+    summarize(outputDir + "/summary.txt",
+              filterNames,
+              fisherScores,
+              eigenvalues,
+              static_cast<int>(trainFiles.size()),
+              static_cast<int>(testFiles.size()),
+              canReportError,
+              numErrors,
+              errorRate);
 
     cout << "\nDone.\n";
-    cout << "25D features saved to: " << outputDir << "/train_features_25d.csv and test_features_25d.csv" << endl;
-    cout << "3D PCA points saved to: " << outputDir << "/train_pca_3d.csv and test_pca_3d.csv" << endl;
+    cout << "25D features saved to: " << outputDir << "/train_features_25d.csv and "
+         << outputDir << "/test_features_25d.csv" << endl;
+    cout << "3D PCA points saved to: " << outputDir << "/train_pca_3d.csv and "
+         << outputDir << "/test_pca_3d.csv" << endl;
     cout << "Predictions saved to: " << outputDir << "/test_predictions.txt" << endl;
     cout << "Summary saved to: " << outputDir << "/summary.txt" << endl;
 

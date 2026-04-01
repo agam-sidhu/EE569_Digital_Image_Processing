@@ -1,0 +1,13 @@
+filename,true_label,predicted_label
+1.raw,grass,grass
+10.raw,brick,brick
+11.raw,blanket,grass
+12.raw,grass,grass
+2.raw,blanket,blanket
+3.raw,blanket,blanket
+4.raw,stones,stones
+5.raw,stones,stones
+6.raw,grass,grass
+7.raw,brick,stones
+8.raw,stones,stones
+9.raw,brick,brick
