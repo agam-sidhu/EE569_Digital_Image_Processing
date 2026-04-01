@@ -19,10 +19,11 @@
 #include <limits>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <opencv2/core.hpp>
 
 using namespace std;
 
-struct KMeansResultFlat {
+struct KMeans {
     vector<int> labels;
     vector<double> centroids;
 };
@@ -190,427 +191,293 @@ static void genLFs(vector< vector< vector<double> > >& filters,
     }
 }
 
-//Function that makes the n by n identity matrix
-static vector< vector<double> > idMat(int val)
-{
-    vector< vector<double> > id(val, vector<double>(val, 0.0));
-    //diagonals = 1
-    for (int i = 0; i < val; i++) {
-        id[i][i] = 1.0;
-    }
-    return id;
-}
-
-// Function to run Jacobian Eigenval Decomposition for a symmetric matrix
-static void jacobDecomp(const vector< vector<double> >& input,
-                                     vector<double>& eVal,
-                                     vector< vector<double> >& eVec)
-{
-    int n = static_cast<int>(input.size());
-    vector< vector<double> > mat = input;
-    eVec = idMat(n);
-
-    const int squareN = n * n;
-    //set up to make sure we dont run forever 
-    const int maxRun = 100 * squareN; 
-    const double ep = 1e-10;
-
-    for (int i = 0; i < maxRun; i++) {
-        int p = 0, q = 1;
-        double maxOffD = 0.0;
-        //finds the largest off diagonal element in mat
-        for (int a = 0; a < n; a++) {
-            for (int b = a + 1; b < n; b++) {
-                double val = fabs(mat[a][b]);
-                if (val > maxOffD) {
-                    maxOffD = val;
-                    p = a;
-                    q = b;
-                }
-            }
-        }
-
-        //breaks if we are close enough to diagonal
-        if (maxOffD < ep) {
-            break;
-        }
-
-        //get elements for jacobian rotation
-        double matpp = mat[p][p];
-        double matqq = mat[q][q];
-        double matpq = mat[p][q];
-
-        //calculates the rotation angle phi
-        double phiVal = 0.5 * atan2(2.0 * matpq, matqq - matpp);
-        double cosVal = cos(phiVal); //cosine val 
-        double sinVal = sin(phiVal); // sine val 
-
-        //applies the rotation
-        for (int k = 0; k < n; k++) {
-            if (k != p && k != q) {
-                double kpVal = mat[k][p];
-                double kqVal = mat[k][q];
-
-                mat[k][p] = cosVal * kpVal - sinVal * kqVal;
-                mat[p][k] = mat[k][p];
-
-                mat[k][q] = sinVal * kpVal + cosVal * kqVal;
-                mat[q][k] = mat[k][q];
-            }
-        }
-
-        //updates our diagonal elements
-        double s2 = sinVal * sinVal;
-        double c2 = cosVal * cosVal;
-        double sc = sinVal * cosVal;
-        double ppNew = c2 * matpp - 2.0 * sc * matpq + s2 * matqq;
-        double qqNew = s2 * matpp + 2.0 * sc * matpq + c2 * matqq;
-        
-        mat[p][p] = ppNew;
-        mat[q][q] = qqNew;
-        mat[p][q] = 0.0;
-        mat[q][p] = 0.0;
-
-        //update the eigenvector matrix
-        for (int k = 0; k < n; k++) {
-            double kpVal = eVec[k][p];
-            double kqVal = eVec[k][q];
-            eVec[k][p] = cosVal * kpVal - sinVal * kqVal;
-            eVec[k][q] = sinVal * kpVal + cosVal * kqVal;
-        }
-    }
-
-    //store the eigenvalues on diagonal of mat
-    eVal.assign(n, 0.0);
-    for (int i = 0; i < n; i++) {
-        eVal[i] = mat[i][i];
-    }
-}
-
-//Operation to sort eignevalues (in descending order) and reorder them
-static void sortEigen(vector<double>& eVals, vector< vector<double> >& eVecs)
-{
-    
-    int dNum = static_cast<int>(eVals.size());
-    vector<int> idxs(dNum);
-    vector<double> sortVals(dNum, 0.0);
-    for (int newIdx = 0; newIdx < dNum; newIdx++) {
-        idxs[newIdx] = newIdx;
-    }
-
-    sort(idxs.begin(), idxs.end(),
-         [&](int idxA, int idxB) {
-            return eVals[idxA] > eVals[idxB];
-    });
-    vector< vector<double> > sortVecs(dNum, vector<double>(dNum, 0.0));
-
-    //reorders eignevals & eigenvecs 
-    for (int i = 0; i < dNum; i++) {
-        sortVals[i] = eVals[idxs[i]];
-        for (int r = 0; r < dNum; r++) {
-            sortVecs[r][i] = eVecs[r][idxs[i]];
-        }
-    }
-    //stores the sorted vals
-    eVals = sortVals;
-    eVecs = sortVecs;
-}
-
-static vector<double> buildIntegral(const vector<double>& data,
+//Function make the inegral img of the abs filter response
+static vector<double> calcInt(const vector<double>& result,
                                     int width,
                                     int height)
 {
     vector<double> integral((width + 1) * (height + 1), 0.0);
 
+    //makes image row by row
     for (int row = 1; row <= height; row++) {
         double rowSum = 0.0;
+
         for (int col = 1; col <= width; col++) {
-            rowSum += fabs(data[(row - 1) * width + (col - 1)]);
-            integral[row * (width + 1) + col] =
-                integral[(row - 1) * (width + 1) + col] + rowSum;
+            //gets the absolute response in row
+            rowSum += fabs(result[(row - 1) * width + (col - 1)]);
+            int idx = row * (width + 1) + col;
+            int idxTop = (row - 1) * (width + 1) + col;
+            integral[idx] = integral[idxTop] + rowSum;
         }
     }
 
     return integral;
 }
 
-static double rectMean(const vector<double>& integral,
+//Function to calculate the mean abs energy 
+static double calcAvg(const vector<double>& integral,
                        int width,
                        int height,
-                       int row0,
-                       int col0,
-                       int row1,
-                       int col1)
+                       int intialRow,
+                       int intialCol,
+                       int finalRow,
+                       int finalCol)
 {
-    row0 = clamp(row0, 0, height - 1);
-    col0 = clamp(col0, 0, width - 1);
-    row1 = clamp(row1, 0, height - 1);
-    col1 = clamp(col1, 0, width - 1);
-
-    if (row1 < row0) {
-        swap(row0, row1);
+    //clamps the coordinates to keep them in valid range
+    int iRow = clamp(intialRow, 0, height - 1);
+    int iCol = clamp(intialCol, 0, width - 1);
+    int fRow = clamp(finalRow, 0, height - 1);
+    int fCol = clamp(finalCol, 0, width - 1);
+    //swap to make sure initial <= final 
+    if (fRow < iRow) {
+        swap(iRow, fRow);
     }
-    if (col1 < col0) {
-        swap(col0, col1);
+    if (fCol < iCol) {
+        swap(iCol, fCol);
     }
-
-    int top = row0;
-    int left = col0;
-    int bottom = row1 + 1;
-    int right = col1 + 1;
+    //integral img coordinates
+    int top = iRow;
+    int left = iCol;
+    int bottom = fRow + 1;
+    int right = fCol + 1;
 
     double sum =
         integral[bottom * (width + 1) + right] -
         integral[top * (width + 1) + right] -
         integral[bottom * (width + 1) + left] +
         integral[top * (width + 1) + left];
-
-    double area = static_cast<double>((row1 - row0 + 1) * (col1 - col0 + 1));
+    double area = static_cast<double>((fRow - iRow + 1) * (fCol - iCol + 1));
     return sum / area;
 }
 
-static void buildNormalizedLawsFeatures(const vector<double>& image,
+//Function to get normalized Law's Features for each pixel
+static void getNormLF(const vector<double>& image,
                                         int width,
                                         int height,
                                         int windowSize,
-                                        vector<double>& features,
+                                        vector<double>& feat,
                                         int& featDim)
 {
+    //subtract the mean intensity from the image to get zero mean img
     vector<double> zeroMean = image;
     meanSub(zeroMean);
 
+    //makes the 25 laws filters
     vector< vector< vector<double> > > filters;
     vector<string> filterNames;
     genLFs(filters, filterNames);
 
     int numPixels = width * height;
-    int halfWindow = windowSize / 2;
-
-    vector<double> baseEnergy(numPixels, 1.0);
+    int halfSize = windowSize / 2;
+    //l5l5 = normalization factor
+    vector<double> energyNorm(numPixels, 1.0);
     vector< vector<double> > energyMaps(24, vector<double>(numPixels, 0.0));
+    featDim = static_cast<int>(filters.size()) - 1;
 
+    //runs through each Law's filter
     for (size_t idx = 0; idx < filters.size(); idx++) {
-        double kernel[5][5];
+        double kern[5][5];
+        //copies filter into kernel array
         for (int r = 0; r < 5; r++) {
             for (int c = 0; c < 5; c++) {
-                kernel[r][c] = filters[idx][r][c];
+                kern[r][c] = filters[idx][r][c];
             }
         }
 
-        vector<double> result;
-        convolveFive(zeroMean, result, width, height, kernel);
-        vector<double> integral = buildIntegral(result, width, height);
+        // convolve img w/ filter & get the integral img of abs response
+        vector<double> res;
+        convolveFive(zeroMean, res, width, height, kern);
+        vector<double> integral = calcInt(res, width, height);
 
+        //calculates the avg energy for each pixel
         for (int row = 0; row < height; row++) {
             for (int col = 0; col < width; col++) {
-                int idxPix = row * width + col;
-                double energy = rectMean(integral,
+                int pixIdx = row * width + col;
+                double energy = calcAvg(integral,
                                          width,
                                          height,
-                                         row - halfWindow,
-                                         col - halfWindow,
-                                         row + halfWindow,
-                                         col + halfWindow);
-
+                                         row - halfSize,
+                                         col - halfSize,
+                                         row + halfSize,
+                                         col + halfSize);
+                
+                //uses the l5l5 energy for normalization
                 if (idx == 0) {
-                    baseEnergy[idxPix] = energy;
+                    energyNorm[pixIdx] = energy;
                 } else {
-                    energyMaps[idx - 1][idxPix] = energy;
+                    energyMaps[idx - 1][pixIdx] = energy;
                 }
             }
         }
     }
-
-    featDim = 24;
-    features.assign(numPixels * featDim, 0.0);
+    //need to flatten into numPixels * featDim
+    feat.assign(numPixels * featDim, 0.0);
     for (int p = 0; p < numPixels; p++) {
-        double denom = baseEnergy[p];
+        //prevents dividing by 0 
+        double denom = energyNorm[p];
         if (denom < 1e-8) {
             denom = 1e-8;
         }
-
-        for (int d = 0; d < featDim; d++) {
-            features[p * featDim + d] = energyMaps[d][p] / denom;
+        for (int dim = 0; dim < featDim; dim++) {
+            int idx = p * featDim + dim;
+            feat[idx] = energyMaps[dim][p] / denom;
         }
     }
 }
 
+//Function to compute mean/std vec for flattened feature data
 static void calcMeanStdFlat(const vector<double>& data,
-                            int n,
-                            int dim,
+                            int numSamples,
+                            int dimNum,
                             vector<double>& mean,
-                            vector<double>& stdv)
+                            vector<double>& std)
 {
-    mean.assign(dim, 0.0);
-    stdv.assign(dim, 0.0);
+    //assigns mean & std
+    mean.assign(dimNum, 0.0);
+    std.assign(dimNum, 0.0);
 
-    for (int i = 0; i < n; i++) {
-        for (int d = 0; d < dim; d++) {
-            mean[d] += data[i * dim + d];
+    //calculates mean
+    for (int i = 0; i < numSamples; i++) {
+        for (int dim = 0; dim < dimNum; dim++) {
+            mean[dim] += data[i * dimNum + dim];
         }
     }
-
-    for (int d = 0; d < dim; d++) {
-        mean[d] /= static_cast<double>(n);
+    for (int d = 0; d < dimNum; d++) {
+        mean[d] /= static_cast<double>(numSamples);
     }
 
-    for (int i = 0; i < n; i++) {
-        for (int d = 0; d < dim; d++) {
-            double diff = data[i * dim + d] - mean[d];
-            stdv[d] += diff * diff;
+    //calculates std
+    for (int i = 0; i < numSamples; i++) {
+        for (int d = 0; d < dimNum; d++) {
+            double diff = data[i * dimNum + d] - mean[d];
+            std[d] += diff * diff;
         }
     }
-
-    for (int d = 0; d < dim; d++) {
-        stdv[d] = sqrt(stdv[d] / static_cast<double>(n));
-        if (stdv[d] < 1e-12) {
-            stdv[d] = 1.0;
+    //prevent divide by 0
+    for (int d = 0; d < dimNum; d++) {
+        std[d] = sqrt(std[d] / static_cast<double>(numSamples));
+        if (std[d] < 1e-12) {
+            std[d] = 1.0;
         }
     }
 }
 
-static void normalizeFlat(vector<double>& data,
-                          int n,
-                          int dim,
+//Function to normalize flattened data (apply z-score norm)
+static void normFlat(vector<double>& data,
+                          int numSamples,
+                          int dimNum,
                           const vector<double>& mean,
-                          const vector<double>& stdv)
+                          const vector<double>& std)
 {
-    for (int i = 0; i < n; i++) {
-        for (int d = 0; d < dim; d++) {
-            data[i * dim + d] = (data[i * dim + d] - mean[d]) / stdv[d];
+    //applies the z score
+    for (int i = 0; i < numSamples; i++) {
+        for (int dim = 0; dim < dimNum; dim++) {
+            int idx = i * dimNum + dim;
+            data[idx] = (data[idx] - mean[dim]) / std[dim];
         }
     }
 }
 
-static vector< vector<double> > calcCovariance(const vector<double>& data,
-                                               int n,
-                                               int dim)
+//Funcion to convert vector into mat
+static cv::Mat vecToMat(const vector<double>& data,
+                        int numSamples,
+                        int dimNum)
 {
-    vector< vector<double> > cov(dim, vector<double>(dim, 0.0));
-    vector<double> mean(dim, 0.0);
-
-    for (int i = 0; i < n; i++) {
-        for (int d = 0; d < dim; d++) {
-            mean[d] += data[i * dim + d];
+    cv::Mat matData(numSamples, dimNum, CV_64F);
+    for (int i = 0; i < numSamples; i++) {
+        for (int d = 0; d < dimNum; d++) {
+            matData.at<double>(i, d) = data[i * dimNum + d];
         }
     }
-
-    for (int d = 0; d < dim; d++) {
-        mean[d] /= static_cast<double>(n);
-    }
-
-    for (int i = 0; i < n; i++) {
-        for (int r = 0; r < dim; r++) {
-            for (int c = 0; c < dim; c++) {
-                cov[r][c] += (data[i * dim + r] - mean[r]) *
-                             (data[i * dim + c] - mean[c]);
-            }
-        }
-    }
-
-    double deno;
-    if (n > 1) {
-        deno = static_cast<double>(n - 1);
-    } else {
-        deno = 1.0;
-    }
-
-    for (int r = 0; r < dim; r++) {
-        for (int c = 0; c < dim; c++) {
-            cov[r][c] /= deno;
-        }
-    }
-
-    return cov;
+    return matData;
 }
 
-static vector<double> projectDataFlat(const vector<double>& data,
-                                      int n,
-                                      int inputDim,
-                                      const vector< vector<double> >& eigenvectors,
-                                      int outDim)
+//Function to convert data into vector
+static vector<double> matToValVec(const cv::Mat& data)
 {
-    vector<double> projected(n * outDim, 0.0);
-
-    for (int i = 0; i < n; i++) {
-        for (int pc = 0; pc < outDim; pc++) {
-            double sum = 0.0;
-            for (int d = 0; d < inputDim; d++) {
-                sum += data[i * inputDim + d] * eigenvectors[d][pc];
-            }
-            projected[i * outDim + pc] = sum;
+    vector<double> val(data.rows * data.cols, 0.0);
+    for (int row = 0; row < data.rows; row++) {
+        for (int col = 0; col < data.cols; col++) {
+            val[row * data.cols + col] = data.at<double>(row, col);
         }
     }
-
-    return projected;
+    return val;
 }
 
-static KMeansResultFlat runKMeansFlat(const vector<double>& data,
-                                      int n,
-                                      int dim,
-                                      int k,
-                                      int maxIter)
+//Function to run Kmeans algo on feature data
+static KMeans kmRunner(const vector<double>& featData,
+                                      int numSamples,
+                                      int featDim,
+                                      int clusterK,
+                                      int maxVal)
 {
-    KMeansResultFlat result;
-    result.labels.assign(n, 0);
-    result.centroids.assign(k * dim, 0.0);
+    //set up labels + centroids 
+    KMeans result;
+    result.labels.assign(numSamples, 0);
+    result.centroids.assign(clusterK * featDim, 0.0);
 
-    for (int c = 0; c < k; c++) {
-        int sample = (c * n) / k;
-        for (int d = 0; d < dim; d++) {
-            result.centroids[c * dim + d] = data[sample * dim + d];
+    //intializes the centroids by evenly sampling spaces
+    for (int c = 0; c < clusterK; c++) {
+        int sIdx= (c * numSamples) / clusterK;
+        for (int d = 0; d < featDim; d++) {
+            int idx = c * featDim + d;
+            int featIdx = sIdx * featDim + d;
+            result.centroids[idx] = featData[featIdx];
         }
     }
+    //loop to run Kmeans until convergence or we hit max value (iterations)
+    for (int iter = 0; iter < maxVal; iter++) {
+        bool altered = false;
+        //stores feature sums + counts for each cluster
+        vector<double> cSum(clusterK * featDim, 0.0);
+        vector<int> cCount(clusterK, 0);
 
-    for (int iter = 0; iter < maxIter; iter++) {
-        bool changed = false;
-        vector<double> sums(k * dim, 0.0);
-        vector<int> counts(k, 0);
-
-        for (int i = 0; i < n; i++) {
+        //goes through each sample and assigns to nearest centroid
+        for (int i = 0; i < numSamples; i++) {
             int bestCluster = 0;
-            double bestDist = numeric_limits<double>::max();
+            double bestD = numeric_limits<double>::max();
 
-            for (int c = 0; c < k; c++) {
+            for (int c = 0; c < clusterK; c++) {
                 double dist = 0.0;
-                for (int d = 0; d < dim; d++) {
-                    double diff = data[i * dim + d] - result.centroids[c * dim + d];
+                for (int d = 0; d < featDim; d++) {
+                    int idx = i * featDim + d;
+                    double diff = featData[idx] - result.centroids[c * featDim + d];
                     dist += diff * diff;
                 }
-
-                if (dist < bestDist) {
-                    bestDist = dist;
+                if (dist < bestD) {
+                    bestD = dist;
                     bestCluster = c;
                 }
             }
-
+            //update label (if cluster changed)
             if (result.labels[i] != bestCluster) {
                 result.labels[i] = bestCluster;
-                changed = true;
+                altered = true;
             }
-
-            counts[bestCluster]++;
-            for (int d = 0; d < dim; d++) {
-                sums[bestCluster * dim + d] += data[i * dim + d];
+            //get sum for centroid update
+            cCount[bestCluster]++;
+            for (int d = 0; d < featDim; d++) {
+                cSum[bestCluster * featDim + d] += featData[i * featDim + d];
             }
         }
-
-        for (int c = 0; c < k; c++) {
-            if (counts[c] == 0) {
-                int sample = (c * n) / k;
-                for (int d = 0; d < dim; d++) {
-                    result.centroids[c * dim + d] = data[sample * dim + d];
+        //recalculate centroid
+        for (int c = 0; c < clusterK; c++) {
+            if (cCount[c] == 0) {
+                int sample = (c * numSamples) / clusterK;
+                for (int dim = 0; dim < featDim; dim++) {
+                    int idx = c * featDim + dim;
+                    result.centroids[idx] = featData[sample * featDim + dim];
                 }
                 continue;
             }
 
-            for (int d = 0; d < dim; d++) {
-                result.centroids[c * dim + d] =
-                    sums[c * dim + d] / static_cast<double>(counts[c]);
+            for (int dim = 0; dim < featDim; dim++) {
+                int idx = c* featDim + dim;
+                result.centroids[idx] = cSum[idx] / static_cast<double>(cCount[c]);
             }
         }
-
-        if (!changed) {
+        //in case no sample changed cluster
+        if (!altered) {
             break;
         }
     }
@@ -618,37 +485,40 @@ static KMeansResultFlat runKMeansFlat(const vector<double>& data,
     return result;
 }
 
+//Function to convert cluster into grayscale
 static vector<uint8_t> labelsToGray(const vector<int>& labels,
                                     int width,
                                     int height,
-                                    const vector<double>& centroids,
-                                    int dim,
-                                    int k)
+                                    const vector<double>& centroid,
+                                    int featDim,
+                                    int clusterK)
 {
-    vector<int> order(k, 0);
-    for (int i = 0; i < k; i++) {
-        order[i] = i;
+    //stores cluster order indices
+    vector<int> orderIdx(clusterK, 0);
+    for (int i = 0; i < clusterK; i++) {
+        orderIdx[i] = i;
     }
-
-    sort(order.begin(), order.end(),
+    //sorts using centroid feature
+    sort(orderIdx.begin(), orderIdx.end(),
          [&](int a, int b) {
-             return centroids[a * dim] < centroids[b * dim];
+             return centroid[a * featDim] < centroid[b * featDim];
          });
-
-    vector<int> remap(k, 0);
-    for (int i = 0; i < k; i++) {
-        remap[order[i]] = i;
+    //maps og cluster id -> sorted grayscale rank
+    vector<int> remap(clusterK, 0);
+    for (int i = 0; i < clusterK; i++) {
+        remap[orderIdx[i]] = i;
     }
-
-    vector<uint8_t> gray(width * height, 0);
+    //makes output img
+    vector<uint8_t> grey(width * height, 0);
     for (int i = 0; i < width * height; i++) {
         int idx = remap[labels[i]];
-        gray[i] = static_cast<uint8_t>((255 * idx) / max(1, k - 1));
+        grey[i] = static_cast<uint8_t>((255 * idx) / max(1, clusterK - 1));
     }
 
-    return gray;
+    return grey;
 }
 
+//Function to run majority filtering
 static void majorityFilter(vector<int>& labels,
                            int width,
                            int height,
@@ -656,198 +526,214 @@ static void majorityFilter(vector<int>& labels,
                            int windowSize,
                            int numPasses)
 {
+    //halves the window size
     int halfWindow = windowSize / 2;
-
+    //through each pass
     for (int pass = 0; pass < numPasses; pass++) {
-        vector<int> filtered = labels;
-
+        vector<int> filt = labels;
+        //goes trhrough each pixel
         for (int row = 0; row < height; row++) {
             for (int col = 0; col < width; col++) {
-                vector<int> counts(k, 0);
-                for (int rr = row - halfWindow; rr <= row + halfWindow; rr++) {
-                    for (int cc = col - halfWindow; cc <= col + halfWindow; cc++) {
-                        int r = clamp(rr, 0, height - 1);
-                        int c = clamp(cc, 0, width - 1);
-                        counts[labels[r * width + c]]++;
+
+                vector<int> count(k, 0);
+                for (int i = row - halfWindow; i <= row + halfWindow; i++) {
+                    for (int  j = col - halfWindow; j <= col + halfWindow; j++) {
+                        int r = clamp(i, 0, height - 1);
+                        int c = clamp(j, 0, width - 1);
+                        int idx = r * width + c;
+                        count[labels[idx]]++;
                     }
                 }
-
-                int current = labels[row * width + col];
+                // looks to find best label
+                int idx = row * width + col;
+                int current = labels[idx];
                 int bestLabel = current;
-                int bestCount = counts[current];
-
+                int bestCount = count[current];
+                //sets best label
                 for (int label = 0; label < k; label++) {
-                    if (counts[label] > bestCount) {
-                        bestCount = counts[label];
+                    if (count[label] > bestCount) {
+                        bestCount = count[label];
                         bestLabel = label;
                     }
                 }
-
-                filtered[row * width + col] = bestLabel;
+                idx = row * width + col;
+                filt[idx] = bestLabel;
             }
         }
 
-        labels = filtered;
+        labels = filt;
     }
 }
-
-static vector<double> computeCentroidsFromLabels(const vector<int>& labels,
+//Function to calculate centroids
+static vector<double> calcCentorids(const vector<int>& label,
                                                  const vector<double>& data,
-                                                 int n,
-                                                 int dim,
+                                                 int numSample,
+                                                 int dimNum,
                                                  int k)
 {
-    vector<double> centroids(k * dim, 0.0);
-    vector<int> counts(k, 0);
-
-    for (int i = 0; i < n; i++) {
-        int label = labels[i];
-        counts[label]++;
-        for (int d = 0; d < dim; d++) {
-            centroids[label * dim + d] += data[i * dim + d];
+    vector<double> centroid(k * dimNum, 0.0);
+    vector<int> count(k, 0);
+    //runs through each sample
+    for (int i = 0; i < numSample; i++) {
+        int lb = label[i];
+        count[lb]++;
+        for (int dim = 0; dim < dimNum; dim++) {
+            int idx = lb * dimNum + dim;
+            centroid[idx] += data[i * dimNum + dim];
         }
     }
-
+    //calculates the centroid
     for (int c = 0; c < k; c++) {
-        if (counts[c] == 0) {
+        if (count[c] == 0) {
             continue;
         }
-        for (int d = 0; d < dim; d++) {
-            centroids[c * dim + d] /= static_cast<double>(counts[c]);
+        for (int dim = 0; dim < dimNum; dim++) {
+            int idx = c * dimNum + dim;
+            centroid[idx] /= static_cast<double>(count[c]);
         }
     }
 
-    return centroids;
+    return centroid;
 }
-
-static void removeSmallComponents(vector<int>& labels,
+//Function to remove the small components
+static void removeMini(vector<int>& labels,
                                   int width,
                                   int height,
                                   int minSize)
 {
-    vector<int> visited(width * height, 0);
-    const int dr[4] = {-1, 1, 0, 0};
-    const int dc[4] = {0, 0, -1, 1};
+    vector<int> seen(width * height, 0);
+     //4-connected neighborhood directions
+    const int rowDir[4] = {-1, 1, 0, 0};
+    const int colDir[4] = {0, 0, -1, 1};
 
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
-            int start = row * width + col;
-            if (visited[start]) {
+            int intialIdx = row * width + col;
+            //skip if already seen 
+            if (seen[intialIdx]) {
                 continue;
             }
+            int ogLB = labels[intialIdx];
+            queue<int> pixelQueue;
+            vector<int> comp;
+            map<int, int> nCount; // neighbor count
 
-            int oldLabel = labels[start];
-            queue<int> q;
-            vector<int> component;
-            map<int, int> neighborCount;
+            seen[intialIdx] = 1;
+            pixelQueue.push(intialIdx);
 
-            visited[start] = 1;
-            q.push(start);
-
-            while (!q.empty()) {
-                int idx = q.front();
-                q.pop();
-                component.push_back(idx);
+            while (!pixelQueue.empty()) {
+                int idx = pixelQueue.front();
+                pixelQueue.pop();
+                comp.push_back(idx);
 
                 int r = idx / width;
                 int c = idx % width;
 
-                for (int k = 0; k < 4; k++) {
-                    int nr = r + dr[k];
-                    int nc = c + dc[k];
-                    if (nr < 0 || nr >= height || nc < 0 || nc >= width) {
+                //checks the 4 connected neighbors
+                for (int dir = 0; dir < 4; dir++) {
+                    int nextRow = r + rowDir[dir];
+                    int nextCol = c + colDir[dir];
+                    if (nextRow < 0 || nextRow >= height || nextCol < 0 || nextCol >= width) {
                         continue;
                     }
-
-                    int nidx = nr * width + nc;
-                    if (labels[nidx] == oldLabel) {
-                        if (!visited[nidx]) {
-                            visited[nidx] = 1;
-                            q.push(nidx);
+                    ///expand component if neighbor has same label
+                    int nextId = nextRow * width + nextCol;
+                    if (labels[nextId] == ogLB) {
+                        if (!seen[nextId]) {
+                            seen[nextId] = 1;
+                            pixelQueue.push(nextId);
                         }
                     } else {
-                        neighborCount[labels[nidx]]++;
+                        //count neighboring labls around this component
+                        nCount[labels[nextId]]++;
                     }
                 }
             }
-
-            if (static_cast<int>(component.size()) >= minSize || neighborCount.empty()) {
+            // keep comp if it is large enough
+            if (static_cast<int>(comp.size()) >= minSize || nCount.empty()) {
                 continue;
             }
 
-            int bestLabel = oldLabel;
+            //find the neighboring label that appears most often
+            int bestLB = ogLB;
             int bestCount = -1;
-            for (map<int, int>::iterator it = neighborCount.begin(); it != neighborCount.end(); ++it) {
+            for (map<int, int>::iterator it = nCount.begin(); it != nCount.end(); ++it) {
                 if (it->second > bestCount) {
                     bestCount = it->second;
-                    bestLabel = it->first;
+                    bestLB = it->first;
                 }
             }
-
-            for (size_t i = 0; i < component.size(); i++) {
-                labels[component[i]] = bestLabel;
+            //replace small component
+            for (size_t i = 0; i < comp.size(); i++) {
+                labels[comp[i]] = bestLB;
             }
         }
     }
 }
 
-static void refineBoundaryPixels(vector<int>& labels,
+static void refineBounds(vector<int>& labels,
                                  int width,
                                  int height,
                                  int k,
                                  const vector<double>& data,
-                                 int dim)
+                                 int dimNum)
 {
-    vector<double> centroids = computeCentroidsFromLabels(labels, data, width * height, dim, k);
-    vector<int> refined = labels;
+
+    vector<double> centroids = calcCentorids(labels, data, width * height, dimNum, k);
+    vector<int> refinedLB = labels;
 
     for (int row = 0; row < height; row++) {
         for (int col = 0; col < width; col++) {
             int idx = row * width + col;
-            int current = labels[idx];
+            int curr = labels[idx];
             bool isBoundary = false;
-            vector<int> candidates;
+            vector<int> candidate;
             vector<int> seen(k, 0);
 
-            for (int rr = row - 1; rr <= row + 1; rr++) {
-                for (int cc = col - 1; cc <= col + 1; cc++) {
-                    int r = clamp(rr, 0, height - 1);
-                    int c = clamp(cc, 0, width - 1);
-                    int neighborLabel = labels[r * width + c];
-                    if (neighborLabel != current) {
+            //looks at 3x3 window around the pixel
+            for (int wRow = row - 1; wRow <= row + 1; wRow++) {
+                for (int wCol = col - 1; wCol <= col + 1; wCol++) {
+                    int r = clamp(wRow, 0, height - 1);
+                    int c = clamp(wCol, 0, width - 1);
+                    int nLB = labels[r * width + c]; //neighbor labels
+                    //if any neighbor has a different label -> current pixel is on a boundary
+                    if (nLB != curr) {
                         isBoundary = true;
                     }
-                    if (!seen[neighborLabel]) {
-                        seen[neighborLabel] = 1;
-                        candidates.push_back(neighborLabel);
+                    //stores unique neighbor labels
+                    if (!seen[nLB]) {
+                        seen[nLB] = 1;
+                        candidate.push_back(nLB);
                     }
                 }
             }
-
+            //skips any non boundary pixels
             if (!isBoundary) {
                 continue;
             }
-
-            int bestLabel = current;
+            //set boundary pixel to the nearest centroid
+            int bestLB = curr;
             double bestDist = numeric_limits<double>::max();
-            for (size_t i = 0; i < candidates.size(); i++) {
-                int label = candidates[i];
+            for (size_t i = 0; i < candidate.size(); i++) {
+                int label = candidate[i];
                 double dist = 0.0;
-                for (int d = 0; d < dim; d++) {
-                    double diff = data[idx * dim + d] - centroids[label * dim + d];
+                for (int d = 0; d < dimNum; d++) {
+                    int diffID = idx * dimNum + d; //data index
+                    double diff = data[diffID] - centroids[label * dimNum + d];
                     dist += diff * diff;
                 }
+                //sets centroid that is closest
                 if (dist < bestDist) {
                     bestDist = dist;
-                    bestLabel = label;
+                    bestLB = label;
                 }
             }
 
-            refined[idx] = bestLabel;
+            refinedLB[idx] = bestLB;
         }
     }
 
-    labels = refined;
+    labels = refinedLB;
 }
 
 int main(int argc, char* argv[])
@@ -858,76 +744,129 @@ int main(int argc, char* argv[])
     }
 
     string hw4Root = argv[1];
+
+    //default window size for Law's energy comp
     int windowSize = 31;
+    vector<double> image;
     if (argc >= 3) {
         windowSize = atoi(argv[2]);
+
         if (windowSize < 3) {
             windowSize = 3;
         }
+
         if (windowSize % 2 == 0) {
             windowSize++;
         }
     }
-
+    //default params
     const int width = 512;
     const int height = 512;
-    const int k = 6;
-    const int reducedDim = 3;
-
+    const int clusterK = 6;
+    const int maxVal = 20;
+    const int refinedDim = 3;
+    //setting up input/output directory
     string inputFile = hw4Root + "/EE569_2026Spring_HW4_materials/Mosaic.raw";
-    string outputDir = hw4Root + "/outputs/p2";
-    string outputFile = outputDir + "/p2b_segmented.raw";
+    string outRoot = hw4Root + "/outputs";
+    string outDir = outRoot + "/p2";
+    string pcaFile = outDir + "/p2b_pca_kmeans.raw";
+    string postFile = outDir + "/p2b_postprocess.raw";
+    string boundFile = outDir + "/p2b_boundary_refined.raw";
+    string outFile = outDir + "/p2b_final.raw";
 
-    ensureDir(hw4Root + "/outputs");
-    ensureDir(outputDir);
+    //make output directories
+    ensureDir(outRoot);
+    ensureDir(outDir);
 
-    vector<double> image;
+    //read the mosaic image
     readGray(inputFile, image, width, height);
 
-    vector<double> features;
+    //extract normalized local Law's features for each pixel
+    vector<double> feat;
     int featDim = 0;
-    buildNormalizedLawsFeatures(image, width, height, windowSize, features, featDim);
+    getNormLF(image, width, height, windowSize, feat, featDim);
 
-    int numPixels = width * height;
-    vector<double> mean;
-    vector<double> stdv;
-    calcMeanStdFlat(features, numPixels, featDim, mean, stdv);
-    normalizeFlat(features, numPixels, featDim, mean, stdv);
+    int numSamples = width * height;
+    vector<double> featMean;
+    vector<double> featStd;
+    calcMeanStdFlat(feat, numSamples, featDim, featMean, featStd);
+    normFlat(feat, numSamples, featDim, featMean, featStd);
 
-    vector< vector<double> > cov = calcCovariance(features, numPixels, featDim);
-    vector<double> eigenvalues;
-    vector< vector<double> > eigenvectors;
-    jacobDecomp(cov, eigenvalues, eigenvectors);
-    sortEigen(eigenvalues, eigenvectors);
-
-    vector<double> projected = projectDataFlat(features,
-                                               numPixels,
-                                               featDim,
-                                               eigenvectors,
-                                               reducedDim);
-
-    KMeansResultFlat result = runKMeansFlat(projected, numPixels, reducedDim, k, 20);
+    //convert the feature vec into Mat (for PCA)
+    cv::Mat featMat = vecToMat(feat, numSamples, featDim);
+    //run PCA 
+    cv::PCA pca(featMat, cv::Mat(), cv::PCA::DATA_AS_ROW, refinedDim);
+    cv::Mat proMat = pca.project(featMat);
+    //flatten the projected PCA data back into vector form
+    vector<double> proj = matToValVec(proMat);
+    //runs k means
+    KMeans result = kmRunner(proj, numSamples, refinedDim, clusterK, maxVal);
     vector<int> labels = result.labels;
 
-    majorityFilter(labels, width, height, k, 3, 1);
-    removeSmallComponents(labels, width, height, 96);
-    refineBoundaryPixels(labels, width, height, k, projected, reducedDim);
-    majorityFilter(labels, width, height, k, 3, 1);
+    //Saves segmentation result
+    vector<uint8_t> imgSeg = labelsToGray(labels,
+                                          width,
+                                          height,
+                                          result.centroids,
+                                          refinedDim,
+                                          clusterK);
+    writeraw(pcaFile, imgSeg);
 
-    vector<double> finalCentroids = computeCentroidsFromLabels(labels,
-                                                               projected,
-                                                               numPixels,
-                                                               reducedDim,
-                                                               k);
-    vector<uint8_t> segmented = labelsToGray(labels,
-                                             width,
-                                             height,
-                                             finalCentroids,
-                                             reducedDim,
-                                             k);
+    //Merge small components (sstep 2)
+    majorityFilter(labels, width, height, clusterK, 3, 1);
+    removeMini(labels, width, height, 96);
 
-    writeraw(outputFile, segmented);
+    //Save the result after the post-processing stage
+    vector<double> postCent = calcCentorids(labels,
+                                                              proj,
+                                                              numSamples,
+                                                              refinedDim,
+                                                              clusterK);
+    imgSeg = labelsToGray(labels,
+                          width,
+                          height,
+                          postCent,
+                          refinedDim,
+                          clusterK);
+    writeraw(postFile, imgSeg);
 
-    cout << "Saved improved segmented mosaic to " << outputFile << endl;
+    //Uses projected data to refine bounds (step 3)
+    refineBounds(labels, width, height, clusterK, proj, refinedDim);
+
+    //Save the result right after boundary refinement
+    vector<double> boundCents = calcCentorids(labels,
+                                                                  proj,
+                                                                  numSamples,
+                                                                  refinedDim,
+                                                                  clusterK);
+    imgSeg = labelsToGray(labels,
+                          width,
+                          height,
+                          boundCents,
+                          refinedDim,
+                          clusterK);
+    writeraw(boundFile, imgSeg);
+
+    majorityFilter(labels, width, height, clusterK, 3, 1);
+
+    //Save the final results
+    vector<double> finalCent = calcCentorids(labels,
+                                                               proj,
+                                                               numSamples,
+                                                               refinedDim,
+                                                               clusterK);
+    imgSeg = labelsToGray(labels,
+                          width,
+                          height,
+                          finalCent,
+                          refinedDim,
+                          clusterK);
+
+    writeraw(outFile, imgSeg);
+
+    cout << "Saved PCA + K-means result to " << pcaFile << endl;
+    cout << "Saved post-processed result to " << postFile << endl;
+    cout << "Saved boundary-refined result to " << boundFile << endl;
+    cout << "Saved final improved segmented mosaic to " << outFile << endl;
     return 0;
 }

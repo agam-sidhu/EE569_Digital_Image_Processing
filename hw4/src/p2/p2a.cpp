@@ -443,6 +443,7 @@ int main(int argc, char* argv[])
 
     //default window size for Law's energy comp
     int windowSize = 31;
+    vector<double> image;
     if (argc >= 3) {
         windowSize = atoi(argv[2]);
 
@@ -472,7 +473,6 @@ int main(int argc, char* argv[])
     ensureDir(outDir);
 
     //read the mosaic image
-    vector<double> image;
     readGray(inputFile, image, width, height);
 
     //extract normalized local Law's features for each pixel
