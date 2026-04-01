@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <opencv2/core.hpp>
 
 using namespace std;
 
@@ -455,154 +456,44 @@ static vector< vector<double> > calcCovar(const vector< vector<double> >& data)
     return covar;
 }
 
-//Function that makes the n by n identity matrix
-static vector< vector<double> > idMat(int val)
-{
-    vector< vector<double> > id(val, vector<double>(val, 0.0));
-    //diagonals = 1
-    for (int i = 0; i < val; i++) {
-        id[i][i] = 1.0;
-    }
-    return id;
-}
-
-// Function to run Jacobian Eigenval Decomposition for a symmetric matrix
-static void jacobDecomp(const vector< vector<double> >& input,
-                                     vector<double>& eVal,
-                                     vector< vector<double> >& eVec)
-{
-    int n = static_cast<int>(input.size());
-    vector< vector<double> > mat = input;
-    eVec = idMat(n);
-
-    const int squareN = n * n;
-    //set up to make sure we dont run forever 
-    const int maxRun = 100 * squareN; 
-    const double ep = 1e-10;
-
-    for (int i = 0; i < maxRun; i++) {
-        int p = 0, q = 1;
-        double maxOffD = 0.0;
-        //finds the largest off diagonal element in mat
-        for (int a = 0; a < n; a++) {
-            for (int b = a + 1; b < n; b++) {
-                double val = fabs(mat[a][b]);
-                if (val > maxOffD) {
-                    maxOffD = val;
-                    p = a;
-                    q = b;
-                }
-            }
-        }
-
-        //breaks if we are close enough to diagonal
-        if (maxOffD < ep) {
-            break;
-        }
-
-        //get elements for jacobian rotation
-        double matpp = mat[p][p];
-        double matqq = mat[q][q];
-        double matpq = mat[p][q];
-
-        //calculates the rotation angle phi
-        double phiVal = 0.5 * atan2(2.0 * matpq, matqq - matpp);
-        double cosVal = cos(phiVal); //cosine val 
-        double sinVal = sin(phiVal); // sine val 
-
-        //applies the rotation
-        for (int k = 0; k < n; k++) {
-            if (k != p && k != q) {
-                double kpVal = mat[k][p];
-                double kqVal = mat[k][q];
-
-                mat[k][p] = cosVal * kpVal - sinVal * kqVal;
-                mat[p][k] = mat[k][p];
-
-                mat[k][q] = sinVal * kpVal + cosVal * kqVal;
-                mat[q][k] = mat[k][q];
-            }
-        }
-
-        //updates our diagonal elements
-        double s2 = sinVal * sinVal;
-        double c2 = cosVal * cosVal;
-        double sc = sinVal * cosVal;
-        double ppNew = c2 * matpp - 2.0 * sc * matpq + s2 * matqq;
-        double qqNew = s2 * matpp + 2.0 * sc * matpq + c2 * matqq;
-        
-        mat[p][p] = ppNew;
-        mat[q][q] = qqNew;
-        mat[p][q] = 0.0;
-        mat[q][p] = 0.0;
-
-        //update the eigenvector matrix
-        for (int k = 0; k < n; k++) {
-            double kpVal = eVec[k][p];
-            double kqVal = eVec[k][q];
-            eVec[k][p] = cosVal * kpVal - sinVal * kqVal;
-            eVec[k][q] = sinVal * kpVal + cosVal * kqVal;
-        }
-    }
-
-    //store the eigenvalues on diagonal of mat
-    eVal.assign(n, 0.0);
-    for (int i = 0; i < n; i++) {
-        eVal[i] = mat[i][i];
-    }
-}
-
-//Operation to sort eignevalues (in descending order) and reorder them
-static void sortEigen(vector<double>& eVals, vector< vector<double> >& eVecs)
-{
-    
-    int dNum = static_cast<int>(eVals.size());
-    vector<int> idxs(dNum);
-    vector<double> sortVals(dNum, 0.0);
-    for (int newIdx = 0; newIdx < dNum; newIdx++) {
-        idxs[newIdx] = newIdx;
-    }
-
-    sort(idxs.begin(), idxs.end(),
-         [&](int idxA, int idxB) {
-            return eVals[idxA] > eVals[idxB];
-    });
-    vector< vector<double> > sortVecs(dNum, vector<double>(dNum, 0.0));
-
-    //reorders eignevals & eigenvecs 
-    for (int i = 0; i < dNum; i++) {
-        sortVals[i] = eVals[idxs[i]];
-        for (int r = 0; r < dNum; r++) {
-            sortVecs[r][i] = eVecs[r][idxs[i]];
-        }
-    }
-    //stores the sorted vals
-    eVals = sortVals;
-    eVecs = sortVecs;
-}
-
-//Function to project the data on the first k principal components
-static vector< vector<double> > projectsPCA(const vector< vector<double> >& data,
-                                               const vector< vector<double> >& eVecs,
-                                               int k)
+//Function to convert vector data into rows
+static cv::Mat vecToMat(const vector< vector<double> >& data)
 {
     int nSamples = static_cast<int>(data.size());
     int dimNum = static_cast<int>(data[0].size());
-    //intialize the data matrix
-    vector< vector<double> > dataMat(nSamples, vector<double>(k, 0.0));
+    cv::Mat matrix(nSamples, dimNum, CV_64F);
 
-    //Project the samples on to PC
-    for (int idx = 0; idx < nSamples; idx++) {
-        for (int pc = 0; pc < k; pc++) {
-            double val = 0.0;
-            //calculates the dot product between the eVec and sample
-            for (int dimIdx = 0; dimIdx < dimNum; dimIdx++) {
-                val += data[idx][dimIdx] * eVecs[dimIdx][pc];
-            }
-            dataMat[idx][pc] = val;
+    for (int row = 0; row < nSamples; row++) {
+        for (int col = 0; col < dimNum; col++) {
+            matrix.at<double>(row, col) = data[row][col];
         }
     }
-    return dataMat;
+
+    return matrix;
+}
+
+//Function to convert cv::Mat rows back into vector data
+static vector< vector<double> > matToVec(const cv::Mat& matrix)
+{
+    vector< vector<double> > result(matrix.rows, vector<double>(matrix.cols, 0.0));
+
+    for (int row = 0; row < matrix.rows; row++) {
+        for (int col = 0; col < matrix.cols; col++) {
+            result[row][col] = matrix.at<double>(row, col);
+        }
+    }
+
+    return result;
+}
+
+//Function to convert PCA eigenvalues into a vector
+static vector<double> matToValVec(const cv::Mat& matrix)
+{
+    vector<double> output(matrix.rows, 0.0);
+    for (int row = 0; row < matrix.rows; row++) {
+        output[row] = matrix.at<double>(row, 0);
+    }
+    return output;
 }
 
 //Function to get inverse of 3x3 matrix (sets false if not 3x3 or singular)
@@ -883,7 +774,7 @@ static void summarize(const string& output,
 
     file.close();
 }
-
+//Main Function
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
@@ -893,37 +784,39 @@ int main(int argc, char* argv[])
     }
 
     string hw4Root = argv[1];
-    string trainDir = hw4Root + "/EE569_2026Spring_HW4_materials/train";
-    string testDir  = hw4Root + "/EE569_2026Spring_HW4_materials/test";
-    string outputsDir = hw4Root + "/outputs";
-    string outputDir = hw4Root + "/outputs/p1";
-    string testLabelMapFile = hw4Root + "/EE569_2026Spring_HW4_materials/test/test_label.txt";
+    string trRepo = hw4Root + "/EE569_2026Spring_HW4_materials/train";
+    string tRepo  = hw4Root + "/EE569_2026Spring_HW4_materials/test";
+    string output = hw4Root + "/outputs";
+    string outputRepo = hw4Root + "/outputs/p1";
+    string tLabelFile = hw4Root + "/EE569_2026Spring_HW4_materials/test/test_label.txt";
 
     const int width = 128;
     const int height = 128;
 
     //Get training and testing file lists
-    vector<string> trainFiles = listRF(trainDir);
-    vector<string> testFiles = listRF(testDir);
+    vector<string> trFile = listRF(trRepo);
+    vector<string> tFile = listRF(tRepo);
 
-    if (trainFiles.empty()) {
-        cerr << "Error: no training raw files found in " << trainDir << endl;
+    //incase train + test files are empty
+    if (trFile.empty()) {
+        cerr << "Error: no training raw files found in " << trRepo << endl;
         return 1;
     }
-    if (testFiles.empty()) {
-        cerr << "Error: no testing raw files found in " << testDir << endl;
+    if (tFile.empty()) {
+        cerr << "Error: no testing raw files found in " << tRepo << endl;
         return 1;
     }
 
-    cout << "Found " << trainFiles.size() << " training files." << endl;
-    cout << "Found " << testFiles.size() << " testing files." << endl;
+    cout << "Found " << trFile.size() << " training files." << endl;
+    cout << "Found " << tFile.size() << " testing files." << endl;
 
-    //Load optional test ground-truth labels
-    map<string, string> testLabelMap = loadTestLabels(testLabelMapFile);
-    bool hasGroundTruth = !testLabelMap.empty();
+    //loads the ground truth labels 
+    map<string, string> tLabelSet = loadTestLabels(tLabelFile);
+    bool hasGT = !tLabelSet.empty();
 
-    if (hasGroundTruth) {
-        cout << "Loaded optional test label map from: " << testLabelMapFile << endl;
+    //checking to see if ground truth labels exist
+    if (hasGT) {
+        cout << "Loaded optional test label map from: " << tLabelFile << endl;
     } else {
         cout << "No test label map found. Test labels will be treated as unknown." << endl;
     }
@@ -933,103 +826,104 @@ int main(int argc, char* argv[])
     vector<string> filterNames;
     genLFs(filters, filterNames);
 
-    vector< vector<double> > trainFeatures;
-    vector< vector<double> > testFeatures;
-    vector<string> trainLabels;
+    vector< vector<double> > trFeatures;
+    vector< vector<double> > tFeatures;
+    vector<string> trLabels;
     vector<string> testLabels;
 
     //Extract training features
-    for (size_t i = 0; i < trainFiles.size(); i++) {
+    for (size_t i = 0; i < trFile.size(); i++) {
         vector<double> image;
-        readGray(trainFiles[i], image, width, height);
+        readGray(trFile[i], image, width, height);
         vector<double> features = extractLFs(image, width, height, filters);
 
-        string label = extractLabel(trainFiles[i]);
+        string label = extractLabel(trFile[i]);
 
-        trainFeatures.push_back(features);
-        trainLabels.push_back(label);
+        trFeatures.push_back(features);
+        trLabels.push_back(label);
 
-        cout << "Processed train: " << getFile(trainFiles[i])
+        cout << "Processed train: " << getFile(trFile[i])
              << "  label = " << label << endl;
     }
 
     //Extract testing features
-    for (size_t i = 0; i < testFiles.size(); i++) {
+    for (size_t i = 0; i < tFile.size(); i++) {
         vector<double> image;
-        readGray(testFiles[i], image, width, height);
+        readGray(tFile[i], image, width, height);
         vector<double> features = extractLFs(image, width, height, filters);
 
-        string baseName = getFile(testFiles[i]);
+        string name = getFile(tFile[i]);
         string label = "unknown";
 
-        if (hasGroundTruth) {
-            map<string, string>::iterator it = testLabelMap.find(baseName);
-            if (it != testLabelMap.end()) {
+        if (hasGT) {
+            map<string, string>::iterator it = tLabelSet.find(name);
+            if (it != tLabelSet.end()) {
                 label = it->second;
             }
-        } else if (!isNumOnly(testFiles[i])) {
-            label = extractLabel(testFiles[i]);
+        } else if (!isNumOnly(tFile[i])) {
+            label = extractLabel(tFile[i]);
         }
 
-        testFeatures.push_back(features);
+        tFeatures.push_back(features);
         testLabels.push_back(label);
 
-        cout << "Processed test:  " << baseName
+        cout << "Processed test:  " << name
              << "  label = " << label << endl;
     }
 
     //Write raw 25D feature vectors
-    writeFCSV(outputDir + "/train_features_25d.csv",
-              trainFiles, trainLabels, trainFeatures, filterNames);
+    writeFCSV(outputRepo + "/train_features_25d.csv",
+              trFile, trLabels, trFeatures, filterNames);
 
-    writeFCSV(outputDir + "/test_features_25d.csv",
-              testFiles, testLabels, testFeatures, filterNames);
+    writeFCSV(outputRepo + "/test_features_25d.csv",
+              tFile, testLabels, tFeatures, filterNames);
 
     //Compute Fisher discriminant scores on raw training features
-    vector<double> fisherScores = calcFDScore(trainFeatures, trainLabels);
+    vector<double> fScore = calcFDScore(trFeatures, trLabels);
 
     //Normalize features using training statistics
-    vector<double> trainMean = calcMeanVec(trainFeatures);
-    vector<double> trainStd = calcStdVec(trainFeatures, trainMean);
+    vector<double> trMean = calcMeanVec(trFeatures);
+    vector<double> trStd = calcStdVec(trFeatures, trMean);
 
-    vector< vector<double> > trainFeaturesNorm = trainFeatures;
-    vector< vector<double> > testFeaturesNorm = testFeatures;
+    vector< vector<double> > normTrFeat = trFeatures;
+    vector< vector<double> > normTFeat = tFeatures;
 
-    normData(trainFeaturesNorm, trainMean, trainStd);
-    normData(testFeaturesNorm, trainMean, trainStd);
+    normData(normTrFeat, trMean, trStd);
+    normData(normTFeat, trMean, trStd);
 
     //PCA using normalized training features
-    vector< vector<double> > covMat = calcCovar(trainFeaturesNorm);
-    vector<double> eigenvalues;
-    vector< vector<double> > eigenvectors;
+    cv::Mat trainDataMat = vecToMat(normTrFeat);
+    cv::Mat testDataMat = vecToMat(normTFeat);
+    cv::PCA pca(trainDataMat, cv::Mat(), cv::PCA::DATA_AS_ROW, 3);
 
-    jacobDecomp(covMat, eigenvalues, eigenvectors);
-    sortEigen(eigenvalues, eigenvectors);
+    vector<double> eVals = matToValVec(pca.eigenvalues);
+    cv::Mat trainPCAMat = pca.project(trainDataMat);
+    cv::Mat testPCAMat = pca.project(testDataMat);
 
-    vector< vector<double> > trainPCA = projectsPCA(trainFeaturesNorm, eigenvectors, 3);
-    vector< vector<double> > testPCA = projectsPCA(testFeaturesNorm, eigenvectors, 3);
+    vector< vector<double> > trPCA = matToVec(trainPCAMat);
+    vector< vector<double> > tPCA = matToVec(testPCAMat);
 
     //Write 3D PCA results
-    writePCA(outputDir + "/train_pca_3d.csv", trainFiles, trainLabels, trainPCA);
-    writePCA(outputDir + "/test_pca_3d.csv", testFiles, testLabels, testPCA);
+    writePCA(outputRepo + "/train_pca_3d.csv", trFile, trLabels, trPCA);
+    writePCA(outputRepo + "/test_pca_3d.csv", tFile, testLabels, tPCA);
 
-    //Compute covariance in 3D PCA space for Mahalanobis distance
-    vector< vector<double> > cov3 = calcCovar(trainPCA);
+    //Calulculates covar in 3D PCA space for Mahalanobis distance
+    vector< vector<double> > cov3 = calcCovar(trPCA);
     for (int d = 0; d < 3; d++) {
         cov3[d][d] += 1e-6;
     }
 
     vector< vector<double> > invCov3;
     if (!invertMat(cov3, invCov3)) {
-        cerr << "Error: failed to invert 3x3 covariance matrix for Mahalanobis distance." << endl;
+        cerr << "Error: failed to invert 3x3 covariance matrix" << endl;
         return 1;
     }
 
     //Nearest-neighbor classification
     int numErrors = 0;
-    int numEvaluated = 0;
+    int evalNum = 0;
 
-    ofstream predFile((outputDir + "/test_predictions.txt").c_str());
+    ofstream predFile((outputRepo + "/test_predictions.txt").c_str());
     if (!predFile) {
         cerr << "Error: cannot open prediction output file." << endl;
         return 1;
@@ -1037,29 +931,29 @@ int main(int argc, char* argv[])
 
     predFile << "filename,true_label,predicted_label,mahalanobis_distance\n";
 
-    for (size_t i = 0; i < testPCA.size(); i++) {
+    for (size_t i = 0; i < tPCA.size(); i++) {
         double bestDist = numeric_limits<double>::max();
         int bestTrainIdx = -1;
 
-        for (size_t j = 0; j < trainPCA.size(); j++) {
-            double dist = calcMahaDist(testPCA[i], trainPCA[j], invCov3);
+        for (size_t j = 0; j < trPCA.size(); j++) {
+            double dist = calcMahaDist(tPCA[i], trPCA[j], invCov3);
             if (dist < bestDist) {
                 bestDist = dist;
                 bestTrainIdx = static_cast<int>(j);
             }
         }
 
-        string predictedLabel = trainLabels[bestTrainIdx];
+        string predictedLabel = trLabels[bestTrainIdx];
         string trueLabel = testLabels[i];
 
         if (trueLabel != "unknown") {
-            numEvaluated++;
+            evalNum++;
             if (predictedLabel != trueLabel) {
                 numErrors++;
             }
         }
 
-        predFile << getFile(testFiles[i]) << ","
+        predFile << getFile(tFile[i]) << ","
                  << trueLabel << ","
                  << predictedLabel << ","
                  << fixed << setprecision(10) << bestDist << "\n";
@@ -1067,34 +961,34 @@ int main(int argc, char* argv[])
 
     predFile.close();
 
-    double errorRate = 0.0;
-    bool canReportError = (numEvaluated == static_cast<int>(testFiles.size()) && numEvaluated > 0);
+    double er = 0.0;
+    bool canReportError = (evalNum == static_cast<int>(tFile.size()) && evalNum > 0);
     if (canReportError) {
-        errorRate = static_cast<double>(numErrors) / static_cast<double>(numEvaluated);
+        er = static_cast<double>(numErrors) / static_cast<double>(evalNum);
     }
 
-    summarize(outputDir + "/summary.txt",
+    summarize(outputRepo + "/summary.txt",
               filterNames,
-              fisherScores,
-              eigenvalues,
-              static_cast<int>(trainFiles.size()),
-              static_cast<int>(testFiles.size()),
+              fScore,
+              eVals,
+              static_cast<int>(trFile.size()),
+              static_cast<int>(tFile.size()),
               canReportError,
               numErrors,
-              errorRate);
+              er);
 
     cout << "\nDone.\n";
-    cout << "25D features saved to: " << outputDir << "/train_features_25d.csv and "
-         << outputDir << "/test_features_25d.csv" << endl;
-    cout << "3D PCA points saved to: " << outputDir << "/train_pca_3d.csv and "
-         << outputDir << "/test_pca_3d.csv" << endl;
-    cout << "Predictions saved to: " << outputDir << "/test_predictions.txt" << endl;
-    cout << "Summary saved to: " << outputDir << "/summary.txt" << endl;
+    cout << "25D features saved to: " << outputRepo << "/train_features_25d.csv and "
+         << outputRepo << "/test_features_25d.csv" << endl;
+    cout << "3D PCA points saved to: " << outputRepo << "/train_pca_3d.csv and "
+         << outputRepo << "/test_pca_3d.csv" << endl;
+    cout << "Predictions saved to: " << outputRepo << "/test_predictions.txt" << endl;
+    cout << "Summary saved to: " << outputRepo << "/summary.txt" << endl;
 
     if (canReportError) {
-        cout << "Test error rate: " << errorRate << endl;
+        cout << "Test error rate: " << er << endl;
     } else {
-        cout << "No valid ground-truth labels for all test images, so no numerical test error rate was reported." << endl;
+        cout << "No valid groundtruth labels for all test images -> No test error returned." << endl;
     }
 
     return 0;

@@ -7,9 +7,9 @@ Most discriminative feature: L5E5  score = 1.29944
 Least discriminative feature (Fisher score): W5L5  score = 0.0194334
 
 Top 3 PCA EignValues:
-PC1: 18.1184  explained ratio = 0.704606
-PC2: 3.94641  explained ratio = 0.153472
-PC3: 1.49134  explained ratio = 0.0579965
+PC1: 17.6151  explained ratio = 0.769158
+PC2: 3.83679  explained ratio = 0.167532
+PC3: 1.44991  explained ratio = 0.0633099
 
 Nearest neighbor classification using Mahalanobis distance in 3D PCA space
 Test errors: 3 / 12

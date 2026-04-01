@@ -20,7 +20,7 @@
 
 using namespace std;
 
-struct KMeansResultFlat {
+struct KMeans {
     vector<int> labels;
     vector<double> centroids;
 };
@@ -187,230 +187,251 @@ static void genLFs(vector< vector< vector<double> > >& filters,
         }
     }
 }
-
-static vector<double> buildIntegral(const vector<double>& data,
+//Function make the inegral img of the abs filter response
+static vector<double> calcInt(const vector<double>& result,
                                     int width,
                                     int height)
 {
     vector<double> integral((width + 1) * (height + 1), 0.0);
 
+    //makes image row by row
     for (int row = 1; row <= height; row++) {
         double rowSum = 0.0;
+
         for (int col = 1; col <= width; col++) {
-            rowSum += fabs(data[(row - 1) * width + (col - 1)]);
-            integral[row * (width + 1) + col] =
-                integral[(row - 1) * (width + 1) + col] + rowSum;
+            //gets the absolute response in row
+            rowSum += fabs(result[(row - 1) * width + (col - 1)]);
+            int idx = row * (width + 1) + col;
+            int idxTop = (row - 1) * (width + 1) + col;
+            integral[idx] = integral[idxTop] + rowSum;
         }
     }
 
     return integral;
 }
-
-static double rectMean(const vector<double>& integral,
+//Function to calculate the mean abs energy 
+static double calcAvg(const vector<double>& integral,
                        int width,
                        int height,
-                       int row0,
-                       int col0,
-                       int row1,
-                       int col1)
+                       int intialRow,
+                       int intialCol,
+                       int finalRow,
+                       int finalCol)
 {
-    row0 = clamp(row0, 0, height - 1);
-    col0 = clamp(col0, 0, width - 1);
-    row1 = clamp(row1, 0, height - 1);
-    col1 = clamp(col1, 0, width - 1);
-
-    if (row1 < row0) {
-        swap(row0, row1);
+    //clamps the coordinates to keep them in valid range
+    int iRow = clamp(intialRow, 0, height - 1);
+    int iCol = clamp(intialCol, 0, width - 1);
+    int fRow = clamp(finalRow, 0, height - 1);
+    int fCol = clamp(finalCol, 0, width - 1);
+    //swap to make sure initial <= final 
+    if (fRow < iRow) {
+        swap(iRow, fRow);
     }
-    if (col1 < col0) {
-        swap(col0, col1);
+    if (fCol < iCol) {
+        swap(iCol, fCol);
     }
-
-    int top = row0;
-    int left = col0;
-    int bottom = row1 + 1;
-    int right = col1 + 1;
-
+    //integral img coordinates
+    int top = iRow;
+    int left = iCol;
+    int bottom = fRow + 1;
+    int right = fCol + 1;
+    //rectangle sum from the integral img
     double sum =
         integral[bottom * (width + 1) + right] -
         integral[top * (width + 1) + right] -
         integral[bottom * (width + 1) + left] +
         integral[top * (width + 1) + left];
 
-    double area = static_cast<double>((row1 - row0 + 1) * (col1 - col0 + 1));
+    double area = static_cast<double>((fRow - iRow + 1) * (fCol - iCol + 1));
     return sum / area;
 }
-
-static void buildNormalizedLawsFeatures(const vector<double>& image,
+//Function to get normalized Law's Features for each pixel
+static void getNormLF(const vector<double>& image,
                                         int width,
                                         int height,
                                         int windowSize,
-                                        vector<double>& features,
+                                        vector<double>& feat,
                                         int& featDim)
 {
+    //subtract the mean intensity from the image to get zero mean img
     vector<double> zeroMean = image;
     meanSub(zeroMean);
 
+    //makes the 25 laws filters
     vector< vector< vector<double> > > filters;
     vector<string> filterNames;
     genLFs(filters, filterNames);
 
     int numPixels = width * height;
-    int halfWindow = windowSize / 2;
-
-    vector<double> baseEnergy(numPixels, 1.0);
+    int halfSize = windowSize / 2;
+    //l5l5 = normalization factor
+    vector<double> energyNorm(numPixels, 1.0);
     vector< vector<double> > energyMaps(24, vector<double>(numPixels, 0.0));
+    featDim = static_cast<int>(filters.size()) - 1;
 
+    //runs through each Law's filter
     for (size_t idx = 0; idx < filters.size(); idx++) {
-        double kernel[5][5];
+        double kern[5][5];
+        //copies filter into kernel array
         for (int r = 0; r < 5; r++) {
             for (int c = 0; c < 5; c++) {
-                kernel[r][c] = filters[idx][r][c];
+                kern[r][c] = filters[idx][r][c];
             }
         }
 
-        vector<double> result;
-        convolveFive(zeroMean, result, width, height, kernel);
-        vector<double> integral = buildIntegral(result, width, height);
+        // convolve img w/ filter & get the integral img of abs response
+        vector<double> res;
+        convolveFive(zeroMean, res, width, height, kern);
+        vector<double> integral = calcInt(res, width, height);
 
+        //calculates the avg energy for each pixel
         for (int row = 0; row < height; row++) {
             for (int col = 0; col < width; col++) {
-                int idxPix = row * width + col;
-                double energy = rectMean(integral,
+                int pixIdx = row * width + col;
+                double energy = calcAvg(integral,
                                          width,
                                          height,
-                                         row - halfWindow,
-                                         col - halfWindow,
-                                         row + halfWindow,
-                                         col + halfWindow);
-
+                                         row - halfSize,
+                                         col - halfSize,
+                                         row + halfSize,
+                                         col + halfSize);
+                
+                //uses the l5l5 energy for normalization
                 if (idx == 0) {
-                    baseEnergy[idxPix] = energy;
+                    energyNorm[pixIdx] = energy;
                 } else {
-                    energyMaps[idx - 1][idxPix] = energy;
+                    energyMaps[idx - 1][pixIdx] = energy;
                 }
             }
         }
     }
-
-    featDim = 24;
-    features.assign(numPixels * featDim, 0.0);
+    //need to flatten into numPixels * featDim
+    feat.assign(numPixels * featDim, 0.0);
     for (int p = 0; p < numPixels; p++) {
-        double denom = baseEnergy[p];
+        //prevents dividing by 0 
+        double denom = energyNorm[p];
         if (denom < 1e-8) {
             denom = 1e-8;
         }
-
-        for (int d = 0; d < featDim; d++) {
-            features[p * featDim + d] = energyMaps[d][p] / denom;
+        for (int dim = 0; dim < featDim; dim++) {
+            int idx = p * featDim + dim;
+            feat[idx] = energyMaps[dim][p] / denom;
         }
     }
 }
-
-static KMeansResultFlat runKMeansFlat(const vector<double>& data,
-                                      int n,
-                                      int dim,
-                                      int k,
-                                      int maxIter)
+//Function to run Kmeans algo on feature data
+static KMeans kmRunner(const vector<double>& featData,
+                                      int numSamples,
+                                      int featDim,
+                                      int clusterK,
+                                      int maxVal)
 {
-    KMeansResultFlat result;
-    result.labels.assign(n, 0);
-    result.centroids.assign(k * dim, 0.0);
+    //set up labels + centroids 
+    KMeans result;
+    result.labels.assign(numSamples, 0);
+    result.centroids.assign(clusterK * featDim, 0.0);
 
-    for (int c = 0; c < k; c++) {
-        int sample = (c * n) / k;
-        for (int d = 0; d < dim; d++) {
-            result.centroids[c * dim + d] = data[sample * dim + d];
+    //intializes the centroids by evenly sampling spaces
+    for (int c = 0; c < clusterK; c++) {
+        int sIdx= (c * numSamples) / clusterK;
+        for (int d = 0; d < featDim; d++) {
+            int idx = c * featDim + d;
+            int featIdx = sIdx * featDim + d;
+            result.centroids[idx] = featData[featIdx];
         }
     }
+    //loop to run Kmeans until convergence or we hit max value (iterations)
+    for (int iter = 0; iter < maxVal; iter++) {
+        bool altered = false;
+        //stores feature sums + counts for each cluster
+        vector<double> cSum(clusterK * featDim, 0.0);
+        vector<int> cCount(clusterK, 0);
 
-    for (int iter = 0; iter < maxIter; iter++) {
-        bool changed = false;
-        vector<double> sums(k * dim, 0.0);
-        vector<int> counts(k, 0);
-
-        for (int i = 0; i < n; i++) {
+        //goes through each sample and assigns to nearest centroid
+        for (int i = 0; i < numSamples; i++) {
             int bestCluster = 0;
-            double bestDist = numeric_limits<double>::max();
+            double bestD = numeric_limits<double>::max();
 
-            for (int c = 0; c < k; c++) {
+            for (int c = 0; c < clusterK; c++) {
                 double dist = 0.0;
-                for (int d = 0; d < dim; d++) {
-                    double diff = data[i * dim + d] - result.centroids[c * dim + d];
+                for (int dim = 0; dim < featDim; dim++) {
+                    int idx = i * featDim + dim;
+                    double diff = featData[idx] - result.centroids[c * featDim + dim];
                     dist += diff * diff;
                 }
-
-                if (dist < bestDist) {
-                    bestDist = dist;
+                if (dist < bestD) {
+                    bestD = dist;
                     bestCluster = c;
                 }
             }
-
+            //update label (if cluster changed)
             if (result.labels[i] != bestCluster) {
                 result.labels[i] = bestCluster;
-                changed = true;
+                altered = true;
             }
-
-            counts[bestCluster]++;
-            for (int d = 0; d < dim; d++) {
-                sums[bestCluster * dim + d] += data[i * dim + d];
+            //get sum for centroid update
+            cCount[bestCluster]++;
+            for (int d = 0; d < featDim; d++) {
+                cSum[bestCluster * featDim + d] += featData[i * featDim + d];
             }
         }
-
-        for (int c = 0; c < k; c++) {
-            if (counts[c] == 0) {
-                int sample = (c * n) / k;
-                for (int d = 0; d < dim; d++) {
-                    result.centroids[c * dim + d] = data[sample * dim + d];
+        //recalculate centroid
+        for (int c = 0; c < clusterK; c++) {
+            if (cCount[c] == 0) {
+                int sample = (c * numSamples) / clusterK;
+                for (int dim = 0; dim < featDim; dim++) {
+                    int idx = c * featDim + dim;
+                    result.centroids[idx] = featData[sample * featDim + dim];
                 }
                 continue;
             }
 
-            for (int d = 0; d < dim; d++) {
-                result.centroids[c * dim + d] =
-                    sums[c * dim + d] / static_cast<double>(counts[c]);
+            for (int dim = 0; dim < featDim; dim++) {
+                int idx = c* featDim + dim;
+                result.centroids[idx] = cSum[idx] / static_cast<double>(cCount[c]);
             }
         }
-
-        if (!changed) {
+        //in case no sample changed cluster
+        if (!altered) {
             break;
         }
     }
 
     return result;
 }
-
+//Function to convert cluster into grayscale
 static vector<uint8_t> labelsToGray(const vector<int>& labels,
                                     int width,
                                     int height,
-                                    const vector<double>& centroids,
-                                    int dim,
-                                    int k)
+                                    const vector<double>& centroid,
+                                    int featDim,
+                                    int clusterK)
 {
-    vector<int> order(k, 0);
-    for (int i = 0; i < k; i++) {
-        order[i] = i;
+    //stores cluster order indices
+    vector<int> orderIdx(clusterK, 0);
+    for (int i = 0; i < clusterK; i++) {
+        orderIdx[i] = i;
     }
-
-    sort(order.begin(), order.end(),
+    //sorts using centroid feature
+    sort(orderIdx.begin(), orderIdx.end(),
          [&](int a, int b) {
-             return centroids[a * dim] < centroids[b * dim];
+             return centroid[a * featDim] < centroid[b * featDim];
          });
-
-    vector<int> remap(k, 0);
-    for (int i = 0; i < k; i++) {
-        remap[order[i]] = i;
+    //maps og cluster id -> sorted grayscale rank
+    vector<int> remap(clusterK, 0);
+    for (int i = 0; i < clusterK; i++) {
+        remap[orderIdx[i]] = i;
     }
-
-    vector<uint8_t> gray(width * height, 0);
+    //makes output img
+    vector<uint8_t> grey(width * height, 0);
     for (int i = 0; i < width * height; i++) {
         int idx = remap[labels[i]];
-        gray[i] = static_cast<uint8_t>((255 * idx) / max(1, k - 1));
+        grey[i] = static_cast<uint8_t>((255 * idx) / max(1, clusterK - 1));
     }
 
-    return gray;
+    return grey;
 }
-
+///Main Function
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
@@ -419,12 +440,18 @@ int main(int argc, char* argv[])
     }
 
     string hw4Root = argv[1];
+
+    //default window size for Law's energy comp
     int windowSize = 31;
     if (argc >= 3) {
         windowSize = atoi(argv[2]);
+
+        //keeps the min window size at 3
         if (windowSize < 3) {
             windowSize = 3;
         }
+
+        //make sure the window size is odd
         if (windowSize % 2 == 0) {
             windowSize++;
         }
@@ -432,34 +459,42 @@ int main(int argc, char* argv[])
 
     const int width = 512;
     const int height = 512;
-    const int k = 6;
+    const int clusterK = 6;
+    const int maxIter = 20;
 
     string inputFile = hw4Root + "/EE569_2026Spring_HW4_materials/Mosaic.raw";
-    string outputDir = hw4Root + "/outputs/p2";
-    string outputFile = outputDir + "/p2a_segmented.raw";
+    string outRoot = hw4Root + "/outputs";
+    string outDir = outRoot + "/p2";
+    string outFile = outDir + "/p2a_segmented.raw";
 
-    ensureDir(hw4Root + "/outputs");
-    ensureDir(outputDir);
+    //make output directories
+    ensureDir(outRoot);
+    ensureDir(outDir);
 
+    //read the mosaic image
     vector<double> image;
     readGray(inputFile, image, width, height);
 
-    vector<double> features;
+    //extract normalized local Law's features for each pixel
+    vector<double> feat;
     int featDim = 0;
-    buildNormalizedLawsFeatures(image, width, height, windowSize, features, featDim);
+    getNormLF(image, width, height, windowSize, feat, featDim);
 
-    int numPixels = width * height;
-    KMeansResultFlat result = runKMeansFlat(features, numPixels, featDim, k, 20);
+    //run K-means on feat matrix
+    int numSamples = width * height;
+    KMeans result = kmRunner(feat, numSamples, featDim, clusterK, maxIter);
 
-    vector<uint8_t> segmented = labelsToGray(result.labels,
-                                             width,
-                                             height,
-                                             result.centroids,
-                                             featDim,
-                                             k);
+    //convert cluster labels into grayscale image
+    vector<uint8_t> segImg = labelsToGray(result.labels,
+                                          width,
+                                          height,
+                                          result.centroids,
+                                          featDim,
+                                          clusterK);
 
-    writeraw(outputFile, segmented);
+    //write segmentation result
+    writeraw(outFile, segImg);
 
-    cout << "Saved segmented mosaic to " << outputFile << endl;
+    cout << "Saved segmented mosaic to " << outFile << endl;
     return 0;
 }

@@ -21,6 +21,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <vector>
+#include <opencv2/core.hpp>
+#include <opencv2/ml.hpp>
 
 using namespace std;
 
@@ -43,9 +45,9 @@ struct ClusterResults { // struct that will store the cluster evaluation results
 };
 
 struct SVMModel { // struct that will hold SVM model params
-    vector<double> weights;
-    double bias;
-    string classLabel;
+    cv::Ptr<cv::ml::SVM> model;
+    map<int, string> intLabelMap;
+    map<string, int> strLabelMap;
 };
 
 //to loercase function
@@ -199,14 +201,21 @@ static double calcSquareDist(const vector<double>& x, const vector<double>& y)
     }
     return result;
 }
-//Function that calculates dot product between 2 vectors
-static double dotProd(const vector<double>& x, const vector<double>& y)
+
+//Function to convert vector data into cv::Mat rows
+static cv::Mat vecToMat(const vector< vector<double> >& data)
 {
-    double result = 0.0;
-    for (size_t i = 0; i < x.size(); i++) {
-        result += x[i] * y[i];
+    int sampleNum = static_cast<int>(data.size());
+    int dimNum = static_cast<int>(data[0].size());
+    cv::Mat dataMat(sampleNum, dimNum, CV_32F);
+
+    for (int row = 0; row < sampleNum; row++) {
+        for (int col = 0; col < dimNum; col++) {
+            dataMat.at<float>(row, col) = static_cast<float>(data[row][col]);
+        }
     }
-    return result;
+
+    return dataMat;
 }
 //Function to run the KMeans algo
 static KMCluster KMeans(const vector< vector<double> >& features,
@@ -221,60 +230,36 @@ static KMCluster KMeans(const vector< vector<double> >& features,
     KMCluster outputerCluster;
     int sampleNum = static_cast<int>(features.size());
     int dimNum = static_cast<int>(features[0].size());
+    cv::Mat dataMat = vecToMat(features);
+    cv::Mat labelMat(sampleNum, 1, CV_32S);
+
+    //intialize the centroids 
+    for (int i = 0; i < sampleNum; i++) {
+        labelMat.at<int>(i, 0) = (i * clusterK) / sampleNum;
+    }
+
+    cv::Mat centerMat;
+    cv::TermCriteria criteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER,
+                              maxVal,
+                              1e-6);
+    cv::kmeans(dataMat,
+               clusterK,
+               labelMat,
+               criteria,
+               1,
+               cv::KMEANS_USE_INITIAL_LABELS,
+               centerMat);
+
     outputerCluster.clusterLabels.assign(sampleNum, 0);
     outputerCluster.centroids.assign(clusterK, vector<double>(dimNum, 0.0));
 
-    //intialize the centroids 
-    for (int c = 0; c < clusterK; c++) {
-        int idx = (c * sampleNum) / clusterK;
-        outputerCluster.centroids[c] = features[idx];
+    for (int i = 0; i < sampleNum; i++) {
+        outputerCluster.clusterLabels[i] = labelMat.at<int>(i, 0);
     }
-    //runs Kmeans until convergence or we hit maxVal (max iterations)
-    for (int i = 0; i < maxVal; i++) {
-        bool altLabel = false;
-        //assigns sample to closest centroid
-        for (int j = 0; j < sampleNum; j++) {
-            int bestCluster = 0;
-            double bestDist = numeric_limits<double>::max();
 
-            for (int c = 0; c < clusterK; c++) {
-                double dist = calcSquareDist(features[j], outputerCluster.centroids[c]);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    bestCluster = c;
-                }
-            }
-
-            if (outputerCluster.clusterLabels[j] != bestCluster) {
-                outputerCluster.clusterLabels[j] = bestCluster;
-                altLabel = true;
-            }
-        }
-        //recalculate the centroids
-        vector< vector<double> > newC(clusterK, vector<double>(dimNum, 0.0));
-        vector<int> counts(clusterK, 0);
-
-        for (int i = 0; i < sampleNum; i++) {
-            int cluster = outputerCluster.clusterLabels[i];
-            counts[cluster]++;
-            for (int d = 0; d < dimNum; d++) {
-                newC[cluster][d] += features[i][d];
-            }
-        }
-        //average sums to get final centroids
-        for (int c = 0; c < clusterK; c++) {
-            if (counts[c] == 0) { //keep old if we have empty cluster
-                newC[c] = features[(c * sampleNum) / clusterK];
-                continue;
-            }
-            for (int d = 0; d < dimNum; d++) {
-                newC[c][d] /= static_cast<double>(counts[c]);
-            }
-        }
-        //update the centroid
-        outputerCluster.centroids = newC;
-        if (!altLabel) {
-            break;
+    for (int row = 0; row < clusterK; row++) {
+        for (int col = 0; col < dimNum; col++) {
+            outputerCluster.centroids[row][col] = static_cast<double>(centerMat.at<float>(row, col));
         }
     }
 
@@ -326,68 +311,31 @@ static ClusterResults evalCluster(const vector<int>& cLabel,
 
     return result;
 }
-//Trains a binary SVM model 
-static SVMModel trainModel(const vector< vector<double> >& features,
-                                  const vector<int>& labels,
-                                  const string& clabel,
-                                  int epochNum,
-                                  double lambda)
-{
-    int featDim = static_cast<int>(features[0].size());
-    int count = 0;
-    SVMModel model;
-    model.weights.assign(featDim, 0.0);
-    model.bias = 0.0;
-    model.classLabel = clabel;
-
-    //Runs through multuple epochs
-    for (int epoch = 0; epoch < epochNum; epoch++) {
-        for (size_t i = 0; i < features.size(); i++) {
-            count++;
-            //adjust learning rate
-            double denom = 1.0 + lambda * static_cast<double>(count);
-            double lr = 1.0 / denom;
-            //gets the margin
-            double y = static_cast<double>(labels[i]);
-            double val = dotProd(model.weights, features[i]) + model.bias;
-            double margin = y * val;
-
-            //shrink weights by regularizing
-            for (int dim = 0; dim < featDim; dim++) {
-                model.weights[dim] *= (1.0 - lr * lambda);
-            }
-            //update weight + bias (if margin is violated)
-            if (margin < 1.0) {
-                for (int d = 0; d < featDim; d++) {
-                    model.weights[d] += lr * y * features[i][d];
-                }
-                model.bias += lr * y;
-            }
-        }
-    }
-
-    return model;
-}
 //Trains a multi class SVM (one v rest approach)
 static vector<SVMModel> trainMClass(const vector< vector<double> >& features,
                                               const vector<string>& labels)
 {
-    //designed to get unique labelss
+    vector<SVMModel> mdls(1);
+    cv::Mat dataMat = vecToMat(features);
+    cv::Mat labelMat(static_cast<int>(labels.size()), 1, CV_32S);
     set<string> uniLabel(labels.begin(), labels.end());
-    vector<SVMModel> mdls;
 
-    //trains 1 binary classifer per class
+    int currIdx = 0;
     for (set<string>::iterator lbIt = uniLabel.begin(); lbIt != uniLabel.end(); ++lbIt) {
-        vector<int> binary(labels.size(), -1);
-        //converts labels into 1 for curr class & -1 for the rest
-        for (size_t i = 0; i < labels.size(); i++) {
-            if (labels[i] == *lbIt) {
-                binary[i] = 1;
-            }
-        }
-
-        mdls.push_back(trainModel(features, binary, *lbIt, 250, 1e-4));
+        mdls[0].strLabelMap[*lbIt] = currIdx;
+        mdls[0].intLabelMap[currIdx] = *lbIt;
+        currIdx++;
     }
+
+    for (size_t i = 0; i < labels.size(); i++) {
+        labelMat.at<int>(static_cast<int>(i), 0) = mdls[0].strLabelMap[labels[i]];
+    }
+
+    mdls[0].model = cv::ml::SVM::create();
+    mdls[0].model->setType(cv::ml::SVM::C_SVC);
+    mdls[0].model->setKernel(cv::ml::SVM::LINEAR);
+    mdls[0].model->setTermCriteria(cv::TermCriteria(cv::TermCriteria::MAX_ITER, 1000, 1e-6));
+    mdls[0].model->train(dataMat, cv::ml::ROW_SAMPLE, labelMat);
 
     return mdls;
 }
@@ -397,20 +345,13 @@ static vector<string> predMClass(const vector< vector<double> >& features,
                                            const vector<SVMModel>& models)
 {   
     vector<string> preds(features.size(), "unknown");
+    cv::Mat dataMat = vecToMat(features);
+
     //goes through the samples & chooses highest scoring classifer 
-    for (size_t i = 0; i < features.size(); i++) {
-        double topScore = -numeric_limits<double>::max();
-        int bestIdx = -1;
-
-        for (size_t m = 0; m < models.size(); m++) {
-            double score = dotProd(models[m].weights, features[i]) + models[m].bias;
-            if (score > topScore) {
-                topScore = score;
-                bestIdx = static_cast<int>(m);
-            }
-        }
-
-        preds[i] = models[bestIdx].classLabel;
+    for (int i = 0; i < dataMat.rows; i++) {
+        float labelNum = models[0].model->predict(dataMat.row(i));
+        int predIdx = static_cast<int>(labelNum);
+        preds[i] = models[0].intLabelMap.find(predIdx)->second;
     }
 
     return preds;
