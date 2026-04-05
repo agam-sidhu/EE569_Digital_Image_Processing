@@ -466,7 +466,7 @@ int main(int argc, char* argv[])
     string inputFile = hw4Root + "/EE569_2026Spring_HW4_materials/Mosaic.raw";
     string outRoot = hw4Root + "/outputs";
     string outDir = outRoot + "/p2";
-    string outFile = outDir + "/p2a_segmented.raw";
+    string outFile = outDir + "/p2a_segmented.raw" + to_string(windowSize) + ".raw";;
 
     //make output directories
     ensureDir(outRoot);

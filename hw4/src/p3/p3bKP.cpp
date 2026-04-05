@@ -2,8 +2,8 @@
  * Name: Agam Sidhu
  * USC ID: 3027948957
  * USC Email: agamsidh@usc.edu
- * Submission Date: [fill]
- * Problem 3(a): Salient Point Descriptor
+ * Submission Date: 
+ * Problem 3(b): Image Matching (Only keypoints)
  */
 
 #include <fstream>
@@ -46,17 +46,17 @@ int main(int argc, char* argv[])
     images.push_back({"Cat_3", materialDir + "/Cat_3.raw"});
     images.push_back({"Dog_1", materialDir + "/Dog_1.raw"});
 
-    ofstream summary((outputDir + "/p3a_summary.txt").c_str());
+    ofstream summary((outputDir + "/p3bkp_summary.txt").c_str());
     if (!summary) {
-        cerr << "Error: cannot open p3a summary output file." << endl;
+        cerr << "Error: cannot open p3b summary output file." << endl;
         return 1;
     }
 
-    summary << "Problem 3(a) SIFT Summary\n";
+    summary << "Problem 3(b) SIFT Keypoint Summary\n";
     summary << "----------------------------------------\n";
 
     for (size_t i = 0; i < images.size(); i++) {
-        cv::Mat image = readRawRGBImage(images[i].path, width, height);
+        cv::Mat image = readrawRGB(images[i].path, width, height);
 
         vector<cv::KeyPoint> keypoints;
         cv::Mat descriptors;
@@ -69,7 +69,7 @@ int main(int argc, char* argv[])
                           cv::Scalar(0, 255, 0),
                           cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 
-        string outputImage = outputDir + "/p3a_" + images[i].name + "_keypoints.png";
+        string outputImage = outputDir + "/p3b_" + images[i].name + "_keypoints.png";
         cv::imwrite(outputImage, keypointView);
 
         summary << images[i].name << "\n";

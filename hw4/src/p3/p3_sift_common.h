@@ -29,7 +29,8 @@ static inline void ensureDir(const string& path)
     mkdir(path.c_str(), 0755);
 }
 
-static inline cv::Mat readRawRGBImage(const string& filename,
+
+static inline cv::Mat readrawRGB(const string& filename,
                                       int width,
                                       int height)
 {

@@ -21,191 +21,244 @@
 
 using namespace std;
 
-struct ImageSpec {
+struct KMeans {
+    vector<int> labels;
+    vector<double> centroids;
+};
+
+//struct to store img names
+struct ImagePair {
+    string leftName;
+    string rightName;
+};
+
+//struct to store img metadata (name + filepath)
+struct ImgData {
     string name;
     string path;
 };
 
-struct ImageFeatureData {
-    string name;
-    cv::Mat descriptors;
+//Struct to store extracted feature descriptors
+struct ImgFeatData {
+    string imgName;
+    cv::Mat desc;
 };
 
-static double rowToCentroidDist(const cv::Mat& data,
-                                int row,
-                                const vector<double>& centroid)
+//Function to calculate the distance between descriptor and centroid
+static double calcDescriptDist(const cv::Mat& desc1,
+                               int row1,
+                               const vector<double>& centroids,
+                               int featDim,
+                               int clusterIdx)
 {
     double sum = 0.0;
-    for (int c = 0; c < data.cols; c++) {
-        double diff = static_cast<double>(data.at<float>(row, c)) - centroid[c];
+    for (int c = 0; c < desc1.cols; c++) {
+        double diff = static_cast<double>(desc1.at<float>(row1, c)) -
+                      centroids[clusterIdx * featDim + c];
+        sum += diff * diff;
+    }
+    double dist = sqrt(sum);
+    return dist;
+}
+
+//Function to calculate the L2 distance bettwen 2 histograms
+static double calcHistDist(const vector<double>& hist1,
+                           const vector<double>& hist2)
+{
+    double sum = 0.0;
+    //calculates the squared dist
+    for (size_t i = 0; i < hist1.size(); i++) {
+        double diff = hist1[i] - hist2[i];
         sum += diff * diff;
     }
     return sqrt(sum);
 }
 
-static double histL2Distance(const vector<double>& histA,
-                             const vector<double>& histB)
-{
-    double sum = 0.0;
-    for (size_t i = 0; i < histA.size(); i++) {
-        double diff = histA[i] - histB[i];
-        sum += diff * diff;
-    }
-    return sqrt(sum);
-}
-
-static cv::Mat stackDescriptors(const vector<ImageFeatureData>& imageData)
+//Function to stack all img descriptors -> 1 matrix
+static cv::Mat stackDesc(const vector<ImgFeatData>& featSet)
 {
     int totalRows = 0;
-    int cols = 0;
-
-    for (size_t i = 0; i < imageData.size(); i++) {
-        totalRows += imageData[i].descriptors.rows;
-        if (!imageData[i].descriptors.empty()) {
-            cols = imageData[i].descriptors.cols;
+    int featDim = 0;
+    //calculates the total # of descriptors rows + feature dimension
+    for (size_t i = 0; i < featSet.size(); i++) {
+        totalRows += featSet[i].desc.rows;
+        if (!featSet[i].desc.empty()) {
+            featDim = featSet[i].desc.cols;
         }
     }
-
-    if (totalRows == 0 || cols == 0) {
+    //returns empty matrix if no descriptors found
+    if (totalRows == 0 || featDim == 0) {
         return cv::Mat();
     }
-
-    cv::Mat allDescriptors(totalRows, cols, CV_32F);
-    int startRow = 0;
-
-    for (size_t i = 0; i < imageData.size(); i++) {
-        if (imageData[i].descriptors.empty()) {
+    //store all descriptors
+    cv::Mat descStore(totalRows, featDim, CV_32F);
+    int rowStart = 0;
+    //copy descriptors into stacked matrix
+    for (size_t idx = 0; idx < featSet.size(); idx++) {
+        if (featSet[idx].desc.empty()) {
             continue;
         }
 
-        imageData[i].descriptors.copyTo(
-            allDescriptors.rowRange(startRow, startRow + imageData[i].descriptors.rows));
-        startRow += imageData[i].descriptors.rows;
+        featSet[idx].desc.copyTo(
+            descStore.rowRange(rowStart, rowStart + featSet[idx].desc.rows));
+        rowStart += featSet[idx].desc.rows;
     }
 
-    return allDescriptors;
+    return descStore;
 }
 
-static vector< vector<double> > initCentroids(const cv::Mat& data, int k)
+//Function to flatten descriptor matrix into feature data
+static vector<double> matToFeatData(const cv::Mat& data)
 {
-    vector< vector<double> > centroids(k, vector<double>(data.cols, 0.0));
+    vector<double> featData(data.rows * data.cols, 0.0);
 
-    for (int cluster = 0; cluster < k; cluster++) {
-        int row = (cluster * data.rows) / k;
-        if (row >= data.rows) {
-            row = data.rows - 1;
-        }
-
-        for (int c = 0; c < data.cols; c++) {
-            centroids[cluster][c] = static_cast<double>(data.at<float>(row, c));
+    for (int row = 0; row < data.rows; row++) {
+        for (int col = 0; col < data.cols; col++) {
+            featData[row * data.cols + col] = static_cast<double>(data.at<float>(row, col));
         }
     }
 
-    return centroids;
+    return featData;
 }
 
-static void runKMeans(const cv::Mat& data,
-                      int k,
-                      int maxIter,
-                      vector<int>& assignments,
-                      vector< vector<double> >& centroids)
+//Function to run Kmeans algo on feature data
+static KMeans kmRunner(const vector<double>& featData,
+                                      int numSamples,
+                                      int featDim,
+                                      int clusterK,
+                                      int maxVal)
 {
-    assignments.assign(data.rows, 0);
-    centroids = initCentroids(data, k);
+    //set up labels + centroids
+    KMeans result;
+    result.labels.assign(numSamples, 0);
+    result.centroids.assign(clusterK * featDim, 0.0);
 
-    for (int iter = 0; iter < maxIter; iter++) {
-        bool changed = false;
+    //intializes the centroids by evenly sampling spaces
+    for (int c = 0; c < clusterK; c++) {
+        int sIdx= (c * numSamples) / clusterK;
+        for (int d = 0; d < featDim; d++) {
+            int idx = c * featDim + d;
+            int featIdx = sIdx * featDim + d;
+            result.centroids[idx] = featData[featIdx];
+        }
+    }
+    //loop to run Kmeans until convergence or we hit max value (iterations)
+    for (int iter = 0; iter < maxVal; iter++) {
+        bool altered = false;
+        //stores feature sums + counts for each cluster
+        vector<double> cSum(clusterK * featDim, 0.0);
+        vector<int> cCount(clusterK, 0);
 
-        vector< vector<double> > sums(k, vector<double>(data.cols, 0.0));
-        vector<int> counts(k, 0);
-
-        for (int row = 0; row < data.rows; row++) {
+        //goes through each sample and assigns to nearest centroid
+        for (int i = 0; i < numSamples; i++) {
             int bestCluster = 0;
-            double bestDist = numeric_limits<double>::max();
+            double bestD = numeric_limits<double>::max();
 
-            for (int cluster = 0; cluster < k; cluster++) {
-                double dist = rowToCentroidDist(data, row, centroids[cluster]);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    bestCluster = cluster;
+            for (int c = 0; c < clusterK; c++) {
+                double dist = 0.0;
+                for (int dim = 0; dim < featDim; dim++) {
+                    int idx = i * featDim + dim;
+                    double diff = featData[idx] - result.centroids[c * featDim + dim];
+                    dist += diff * diff;
+                }
+                if (dist < bestD) {
+                    bestD = dist;
+                    bestCluster = c;
                 }
             }
-
-            if (assignments[row] != bestCluster) {
-                assignments[row] = bestCluster;
-                changed = true;
+            //update label (if cluster changed)
+            if (result.labels[i] != bestCluster) {
+                result.labels[i] = bestCluster;
+                altered = true;
             }
-
-            counts[bestCluster]++;
-            for (int c = 0; c < data.cols; c++) {
-                sums[bestCluster][c] += static_cast<double>(data.at<float>(row, c));
+            //get sum for centroid update
+            cCount[bestCluster]++;
+            for (int d = 0; d < featDim; d++) {
+                cSum[bestCluster * featDim + d] += featData[i * featDim + d];
             }
         }
-
-        for (int cluster = 0; cluster < k; cluster++) {
-            if (counts[cluster] == 0) {
-                int row = (cluster * data.rows) / k;
-                if (row >= data.rows) {
-                    row = data.rows - 1;
-                }
-                for (int c = 0; c < data.cols; c++) {
-                    centroids[cluster][c] = static_cast<double>(data.at<float>(row, c));
+        //recalculate centroid
+        for (int c = 0; c < clusterK; c++) {
+            if (cCount[c] == 0) {
+                int sample = (c * numSamples) / clusterK;
+                for (int dim = 0; dim < featDim; dim++) {
+                    int idx = c * featDim + dim;
+                    result.centroids[idx] = featData[sample * featDim + dim];
                 }
                 continue;
             }
 
-            for (int c = 0; c < data.cols; c++) {
-                centroids[cluster][c] = sums[cluster][c] /
-                                        static_cast<double>(counts[cluster]);
+            for (int dim = 0; dim < featDim; dim++) {
+                int idx = c* featDim + dim;
+                result.centroids[idx] = cSum[idx] / static_cast<double>(cCount[c]);
             }
         }
-
-        if (!changed) {
+        //in case no sample changed cluster
+        if (!altered) {
             break;
         }
     }
+
+    return result;
 }
 
-static int nearestCentroid(const cv::Mat& descriptors,
-                           int row,
-                           const vector< vector<double> >& centroids)
+//Function to find the closest centroid match
+static int findBestMatch(const cv::Mat& queryDesc,
+                         const vector<double>& centroids,
+                         int featDim,
+                         int clusterK,
+                         double& bestDist)
 {
-    int bestCluster = 0;
-    double bestDist = numeric_limits<double>::max();
+    //intialize the best distance + index
+    bestDist = numeric_limits<double>::max();
+    int bestIdx = -1;
 
-    for (size_t cluster = 0; cluster < centroids.size(); cluster++) {
-        double dist = rowToCentroidDist(descriptors, row, centroids[cluster]);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestCluster = static_cast<int>(cluster);
+    //checks the query descriptor vs every centroid
+    for (int idx = 0; idx < clusterK; idx++) {
+        // compute the distance from query desc to centroid
+        double currDist = calcDescriptDist(queryDesc,
+                                           0,
+                                           centroids,
+                                           featDim,
+                                           idx);
+        if (currDist < bestDist) {
+            bestDist = currDist;
+            bestIdx = idx;
         }
     }
 
-    return bestCluster;
+    return bestIdx;
 }
-
-static vector<double> buildNormalizedHistogram(const cv::Mat& descriptors,
-                                               const vector< vector<double> >& centroids)
+//Function to build a normalized histogram 
+static vector<double> makeNormHist(const cv::Mat& desc,
+                                               const vector<double>& centroids,
+                                               int featDim,
+                                               int clusterK)
 {
-    vector<double> hist(centroids.size(), 0.0);
-    if (descriptors.empty()) {
+    //intializes the historgram (w/ one bin per visual)
+    vector<double> hist(clusterK, 0.0);
+    //returns empty hist if no descriptor
+    if (desc.empty()) {
         return hist;
     }
-
-    for (int row = 0; row < descriptors.rows; row++) {
-        int cluster = nearestCentroid(descriptors, row, centroids);
-        hist[cluster] += 1.0;
+    //sets each descriptor to its closest centroid
+    for (int row = 0; row < desc.rows; row++) {
+        cv::Mat queryDesc = desc.row(row);
+        double bestDist = 0.0;
+        int bestCluster = findBestMatch(queryDesc, centroids, featDim, clusterK, bestDist);
+        hist[bestCluster] += 1.0;
     }
 
+    //normalize the histogram by total # of descriptors
     for (size_t i = 0; i < hist.size(); i++) {
-        hist[i] /= static_cast<double>(descriptors.rows);
+        hist[i] /= static_cast<double>(desc.rows);
     }
 
     return hist;
 }
-
-static void writeHistogramCSV(const string& filename,
-                              const vector<ImageFeatureData>& imageData,
+//Function to write the histogram -> CSV
+static void writeToCSV(const string& filename,
+                              const vector<ImgFeatData>& featSet,
                               const vector< vector<double> >& histograms)
 {
     ofstream file(filename.c_str());
@@ -213,25 +266,25 @@ static void writeHistogramCSV(const string& filename,
         cerr << "Error: cannot open histogram CSV file " << filename << endl;
         exit(1);
     }
-
+    //header of csv
     file << "filename";
     for (int bin = 0; bin < 8; bin++) {
         file << ",bin" << bin;
     }
     file << "\n";
-
-    for (size_t i = 0; i < imageData.size(); i++) {
-        file << imageData[i].name;
-        for (size_t bin = 0; bin < histograms[i].size(); bin++) {
-            file << "," << fixed << setprecision(10) << histograms[i][bin];
+    //writes 1 histogram per image
+    for (size_t binIdx = 0; binIdx < featSet.size(); binIdx++) {
+        file << featSet[binIdx].imgName;
+        for (size_t bin = 0; bin < histograms[binIdx].size(); bin++) {
+            file << "," << fixed << setprecision(10) << histograms[binIdx][bin];
         }
         file << "\n";
     }
 
     file.close();
 }
-
-static void writeComparisonText(const string& filename,
+//Function to write comparison distance -> txt file 
+static void writeCompare(const string& filename,
                                 double cat3Cat1,
                                 double cat3Cat2,
                                 double cat3Dog1)
@@ -252,6 +305,7 @@ static void writeComparisonText(const string& filename,
     file.close();
 }
 
+//Main Function
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
@@ -260,81 +314,105 @@ int main(int argc, char* argv[])
     }
 
     string hw4Root = argv[1];
-    string materialDir = hw4Root + "/EE569_2026Spring_HW4_materials";
-    string outputDir = hw4Root + "/outputs/p3";
+    string matDir = hw4Root + "/EE569_2026Spring_HW4_materials";
+    string outDir = hw4Root + "/outputs/p3";
 
+    //make output directories
     ensureDir(hw4Root + "/outputs");
-    ensureDir(outputDir);
+    ensureDir(outDir);
 
     const int width = 600;
     const int height = 400;
-    const int k = 8;
+    const int clusterK = 8;
     const int maxIter = 100;
 
-    vector<ImageSpec> images;
-    images.push_back({"Cat_1.raw", materialDir + "/Cat_1.raw"});
-    images.push_back({"Cat_2.raw", materialDir + "/Cat_2.raw"});
-    images.push_back({"Cat_3.raw", materialDir + "/Cat_3.raw"});
-    images.push_back({"Dog_1.raw", materialDir + "/Dog_1.raw"});
+    //store the image set
+    vector<ImgData> imgSet;
+    imgSet.push_back({"Cat_1.raw", matDir + "/Cat_1.raw"});
+    imgSet.push_back({"Cat_2.raw", matDir + "/Cat_2.raw"});
+    imgSet.push_back({"Cat_3.raw", matDir + "/Cat_3.raw"});
+    imgSet.push_back({"Dog_1.raw", matDir + "/Dog_1.raw"});
 
-    vector<ImageFeatureData> imageData;
+    //store the comparison pairs
+    vector<ImagePair> pairs;
+    pairs.push_back({"Cat_3.raw", "Cat_1.raw"});
+    pairs.push_back({"Cat_3.raw", "Cat_2.raw"});
+    pairs.push_back({"Cat_3.raw", "Dog_1.raw"});
 
-    // Extract SIFT descriptors for every image.
-    for (size_t i = 0; i < images.size(); i++) {
-        cv::Mat image = readRawRGBImage(images[i].path, width, height);
+    vector<ImgFeatData> featSet; //stores descriptor data
 
-        vector<cv::KeyPoint> keypoints;
-        cv::Mat descriptors;
-        extractSIFT(image, keypoints, descriptors);
+    //extracts the SIFT keypoints + descriptors
+    for (size_t idx = 0; idx < imgSet.size(); idx++) {
+        cv::Mat img = readrawRGB(imgSet[idx].path, width, height);
 
-        ImageFeatureData curr;
-        curr.name = images[i].name;
-        curr.descriptors = descriptors;
-        imageData.push_back(curr);
+        vector<cv::KeyPoint> kp;
+        cv::Mat desc;
+        extractSIFT(img, kp, desc);
 
-        cout << "Extracted " << descriptors.rows
-             << " descriptors from " << images[i].name << endl;
+        ImgFeatData curr;
+        curr.imgName = imgSet[idx].name;
+        curr.desc = desc;
+        featSet.push_back(curr);
+
+        cout << "Extracted " << desc.rows
+             << " descriptors from " << imgSet[idx].name << endl;
     }
-
-    cv::Mat allDescriptors = stackDescriptors(imageData);
-    if (allDescriptors.empty()) {
+    //stacks all descriptors -> 1 matrix
+    cv::Mat allDesc = stackDesc(featSet);
+    if (allDesc.empty()) {
         cerr << "Error: no SIFT descriptors were extracted." << endl;
         return 1;
     }
 
-    // Build the 8-word codebook using all descriptors.
-    vector<int> assignments;
-    vector< vector<double> > centroids;
-    runKMeans(allDescriptors, k, maxIter, assignments, centroids);
+    //build the 8-word codebook using all descriptors
+    int numSamples = allDesc.rows;
+    int featDim = allDesc.cols;
+    vector<double> featData = matToFeatData(allDesc);
+    KMeans result = kmRunner(featData,
+                             numSamples,
+                             featDim,
+                             clusterK,
+                             maxIter);
 
-    // Build one normalized histogram for each image.
-    vector< vector<double> > histograms;
-    map<string, int> imageIndex;
-    for (size_t i = 0; i < imageData.size(); i++) {
-        histograms.push_back(buildNormalizedHistogram(imageData[i].descriptors, centroids));
-        imageIndex[imageData[i].name] = static_cast<int>(i);
+    //build one normalized histogram for each image
+    vector< vector<double> > histSet;
+    map<string, int> imgIndex;
+    for (size_t idx = 0; idx < featSet.size(); idx++) {
+        histSet.push_back(makeNormHist(featSet[idx].desc,
+                                                      result.centroids,
+                                                      featDim,
+                                                      clusterK));
+        imgIndex[featSet[idx].imgName] = static_cast<int>(idx);
+    }
+    //computes the histogram disances between image pairs
+    vector<double> pairDist;
+    for (size_t pIdx = 0; pIdx < pairs.size(); pIdx++) {
+        double dist = calcHistDist(histSet[imgIndex[pairs[pIdx].leftName]],
+                                   histSet[imgIndex[pairs[pIdx].rightName]]);
+        pairDist.push_back(dist);
     }
 
-    double cat3Cat1 = histL2Distance(histograms[imageIndex["Cat_3.raw"]],
-                                     histograms[imageIndex["Cat_1.raw"]]);
-    double cat3Cat2 = histL2Distance(histograms[imageIndex["Cat_3.raw"]],
-                                     histograms[imageIndex["Cat_2.raw"]]);
-    double cat3Dog1 = histL2Distance(histograms[imageIndex["Cat_3.raw"]],
-                                     histograms[imageIndex["Dog_1.raw"]]);
+    double cat3Cat1 = pairDist[0];
+    double cat3Cat2 = pairDist[1];
+    double cat3Dog1 = pairDist[2];
 
-    string histFile = outputDir + "/p3c_bow_histograms.csv";
-    string compareFile = outputDir + "/p3c_bow_comparison.txt";
-
-    writeHistogramCSV(histFile, imageData, histograms);
-    writeComparisonText(compareFile, cat3Cat1, cat3Cat2, cat3Dog1);
-
+    string outFile = outDir + "/p3c_bow_histograms.csv";
+    string summaryFile = outDir + "/p3c_bow_comparison.txt";
+    //write the histogram CSV
+    writeToCSV(outFile, featSet, histSet);
+    writeCompare(summaryFile, cat3Cat1, cat3Cat2, cat3Dog1);
+    //print summary
     cout << fixed << setprecision(10);
-    cout << "Cat_3 vs Cat_1: " << cat3Cat1 << endl;
-    cout << "Cat_3 vs Cat_2: " << cat3Cat2 << endl;
-    cout << "Cat_3 vs Dog_1: " << cat3Dog1 << endl;
+    for (size_t i = 0; i < pairs.size(); i++) {
+        cout << pairs[i].leftName.substr(0, pairs[i].leftName.size() - 4)
+             << " vs "
+             << pairs[i].rightName.substr(0, pairs[i].rightName.size() - 4)
+             << ": "
+             << pairDist[i] << endl;
+    }
     cout << "\nGenerated files:" << endl;
-    cout << histFile << endl;
-    cout << compareFile << endl;
+    cout << outFile << endl;
+    cout << summaryFile << endl;
 
     return 0;
 }

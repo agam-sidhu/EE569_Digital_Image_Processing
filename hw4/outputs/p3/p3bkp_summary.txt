@@ -1,4 +1,4 @@
-Problem 3(a) SIFT Summary
+Problem 3(b) SIFT Keypoint Summary
 ----------------------------------------
 Cat_1
 Keypoint count: 942
