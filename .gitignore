@@ -1,2 +1,12 @@
 *.zip
 *.zip.bak
+.DS_Store
+__pycache__/
+*.pyc
+**/outputs/
+**/outputs 2/
+**/colab_downlaods/
+**/datasets/
+hw5/PyTorch-Scratch-Vision-Transformer-ViT-main/
+hw5 copy/
+hw5/hw5 submission/
